@@ -110,6 +110,18 @@ public sealed class MockPlaybackSession
         RaiseChanged();
     }
 
+    public void ShowPlaybackError()
+    {
+        if (!HasKnownDuration)
+        {
+            ShowError();
+            return;
+        }
+
+        State = MediaUiState.Error;
+        RaiseChanged();
+    }
+
     public void SetVolume(int volumePercent)
     {
         var clampedVolume = Math.Clamp(volumePercent, 0, 500);

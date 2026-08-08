@@ -103,6 +103,23 @@ internal static class UiMockValidation
         Require(session.State == MediaUiState.Error && !session.CanControlPlayback, "Error state must disable controls.");
         checks.Add("error-state");
 
+        session.CompleteLoading(TimeSpan.FromSeconds(42));
+        var durationBeforePlaybackError = session.Duration;
+        session.ShowPlaybackError();
+        Require(session.State == MediaUiState.Error, "A playback failure must enter the error state.");
+        Require(session.Position == TimeSpan.FromSeconds(42) && session.Duration == durationBeforePlaybackError, "A mid-playback failure must preserve the last position and duration.");
+        Require(!session.CanControlPlayback, "A mid-playback failure must disable playback controls.");
+        checks.Add("mid-playback-error-state");
+
+        var failureDefinitions = Enum.GetValues<ReviewFailureScenario>()
+            .Select(ErrorFeedbackCatalog.Get)
+            .ToArray();
+        Require(failureDefinitions.Length == 8, "Every review failure scenario must have feedback.");
+        Require(failureDefinitions.All(definition => !string.IsNullOrWhiteSpace(definition.Message)), "Failure feedback must always explain the problem and next action.");
+        Require(failureDefinitions.Count(definition => definition.Severity == NotificationSeverity.Warning) == 2, "Recoverable persistence failures must use warning feedback.");
+        Require(failureDefinitions.Single(definition => definition.Outcome == FailureOutcome.PlaybackError).Severity == NotificationSeverity.Error, "A mid-playback failure must use error feedback.");
+        checks.Add("failure-feedback-catalog");
+
         var window = new MainWindow
         {
             ShowInTaskbar = false,
@@ -137,6 +154,19 @@ internal static class UiMockValidation
             recentFilesMenu.Items.OfType<MenuItem>().Count(item => item.Tag is not null) == 3,
             "Bulk removal must preserve existing history entries and the clear-history command.");
         checks.Add("recent-missing-bulk-delete-menu");
+
+        window.RunReviewFailureScenario(ReviewFailureScenario.UnsupportedCodecBeforeSwitch);
+        var reviewStateText = (TextBlock?)window.FindName("ReviewStateText");
+        var notificationToast = (FrameworkElement?)window.FindName("NotificationToast");
+        Require(reviewStateText?.Text == "MEDIA-PLAYING", "A pre-switch codec rejection must preserve current playback.");
+        Require(notificationToast?.Visibility == Visibility.Visible, "A pre-switch rejection must show non-modal feedback.");
+        window.RunReviewFailureScenario(ReviewFailureScenario.CorruptDuringPlayback);
+        var playbackErrorOverlay = (FrameworkElement?)window.FindName("PlaybackErrorOverlay");
+        Require(reviewStateText?.Text == "MEDIA-ERROR（再生中）", "A mid-playback corruption must expose a distinct error state.");
+        Require(playbackErrorOverlay?.Visibility == Visibility.Visible, "A mid-playback corruption must show an in-content recovery action.");
+        window.RunReviewFailureScenario(ReviewFailureScenario.MissingFileWithoutMedia);
+        Require(reviewStateText?.Text == "MEDIA-EMPTY", "A missing file without current media must return to the empty state.");
+        checks.Add("failure-feedback-window-states");
         window.Close();
         var settingsWindow = new ThumbnailSettingsWindow(1.25)
         {

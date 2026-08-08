@@ -702,6 +702,52 @@ public partial class MainWindow : Window
         }
     }
 
+    private void RunFailureScenarioButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (ReviewFailureScenarioComboBox.SelectedItem is not ComboBoxItem { Tag: string scenarioName }
+            || !Enum.TryParse<ReviewFailureScenario>(scenarioName, out var scenario))
+        {
+            return;
+        }
+
+        RunReviewFailureScenario(scenario);
+    }
+
+    internal void RunReviewFailureScenario(ReviewFailureScenario scenario)
+    {
+        _loadingTimer.Stop();
+        var feedback = ErrorFeedbackCatalog.Get(scenario);
+        if (feedback.Outcome is FailureOutcome.PreservePlayback or FailureOutcome.PlaybackError
+            && !_session.CanControlPlayback)
+        {
+            _currentFilePath = DefaultMockFilePath;
+            _session.CompleteLoading(TimeSpan.FromMinutes(12));
+        }
+        else if (scenario == ReviewFailureScenario.PersistenceUnavailable && !_session.CanControlPlayback)
+        {
+            _currentFilePath = DefaultMockFilePath;
+            _session.CompleteLoading(TimeSpan.FromMinutes(12));
+        }
+
+        switch (feedback.Outcome)
+        {
+            case FailureOutcome.Empty:
+                _session.Reset();
+                break;
+            case FailureOutcome.PreservePlayback:
+                break;
+            case FailureOutcome.PlaybackError:
+                PlaybackErrorMessageText.Text = feedback.Message;
+                NotificationToast.Visibility = Visibility.Collapsed;
+                _session.ShowPlaybackError();
+                return;
+            case FailureOutcome.Continue:
+                break;
+        }
+
+        ShowNotification(feedback.Message, feedback.Severity);
+    }
+
     private void ReviewPanelMenuItem_OnClick(object sender, RoutedEventArgs e)
     {
         if (sender is MenuItem menuItem)
@@ -908,13 +954,22 @@ public partial class MainWindow : Window
         return FileOpenRequestClassifier.Classify(paths);
     }
 
-    private void ShowNotification(string message, bool isError)
+    private void ShowNotification(string message, bool isError) =>
+        ShowNotification(message, isError ? NotificationSeverity.Error : NotificationSeverity.Info);
+
+    private void ShowNotification(string message, NotificationSeverity severity)
     {
+        var colors = severity switch
+        {
+            NotificationSeverity.Error => (Icon: "!", Foreground: "#FF6B79", Border: "#9E4050", Background: "#F52A1B25"),
+            NotificationSeverity.Warning => (Icon: "⚠", Foreground: "#FFC66D", Border: "#9A6A2D", Background: "#F52B2115"),
+            _ => (Icon: "i", Foreground: "#70C8FF", Border: "#41769B", Background: "#F5182A38"),
+        };
         NotificationToastText.Text = message;
-        NotificationToastIcon.Text = isError ? "!" : "i";
-        NotificationToastIcon.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(isError ? "#FF6B79" : "#70C8FF"));
-        NotificationToast.BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(isError ? "#9E4050" : "#41769B"));
-        NotificationToast.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(isError ? "#F52A1B25" : "#F5182A38"));
+        NotificationToastIcon.Text = colors.Icon;
+        NotificationToastIcon.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(colors.Foreground));
+        NotificationToast.BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(colors.Border));
+        NotificationToast.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(colors.Background));
         NotificationToast.Visibility = Visibility.Visible;
     }
 
@@ -932,8 +987,12 @@ public partial class MainWindow : Window
 
         EmptyStatePanel.Visibility = state == MediaUiState.Empty ? Visibility.Visible : Visibility.Collapsed;
         LoadingStatePanel.Visibility = state == MediaUiState.Loading ? Visibility.Visible : Visibility.Collapsed;
-        ErrorStatePanel.Visibility = state == MediaUiState.Error ? Visibility.Visible : Visibility.Collapsed;
-        MockVideoArtwork.Visibility = state is MediaUiState.Playing or MediaUiState.Paused ? Visibility.Visible : Visibility.Collapsed;
+        var isPlaybackError = state == MediaUiState.Error && _session.HasKnownDuration;
+        ErrorStatePanel.Visibility = state == MediaUiState.Error && !isPlaybackError ? Visibility.Visible : Visibility.Collapsed;
+        PlaybackErrorOverlay.Visibility = isPlaybackError ? Visibility.Visible : Visibility.Collapsed;
+        MockVideoArtwork.Visibility = (state is MediaUiState.Playing or MediaUiState.Paused) || isPlaybackError
+            ? Visibility.Visible
+            : Visibility.Collapsed;
 
         if (!_session.CanControlPlayback)
         {
@@ -950,11 +1009,18 @@ public partial class MainWindow : Window
         SeekSlider.IsEnabled = _session.CanControlPlayback && _session.HasKnownDuration;
         MuteButton.IsEnabled = _session.CanControlPlayback;
         VolumeSlider.IsEnabled = _session.CanControlPlayback;
+        PlayPauseButton.ToolTip = _session.CanControlPlayback
+            ? state == MediaUiState.Playing ? "一時停止" : "再生"
+            : "動画を開くと再生できます";
+        SeekSlider.ToolTip = SeekSlider.IsEnabled ? "再生位置" : "動画を開くとシークできます";
+        VolumeSlider.ToolTip = VolumeSlider.IsEnabled ? "音量 0～500%" : "動画を開くと音量を変更できます";
         SeekSlider.Maximum = _session.HasKnownDuration ? _session.Duration.TotalSeconds : 1;
         VolumeSlider.Value = _session.VolumePercent;
         VolumeText.Text = $"{_session.VolumePercent}%";
         MuteButton.Content = _session.IsMuted ? "🔇" : "🔊";
-        MuteButton.ToolTip = _session.IsMuted ? "ミュート解除" : "ミュート";
+        MuteButton.ToolTip = _session.CanControlPlayback
+            ? _session.IsMuted ? "ミュート解除" : "ミュート"
+            : "動画を開くとミュートを変更できます";
         MuteButton.SetValue(
             System.Windows.Automation.AutomationProperties.NameProperty,
             _session.IsMuted ? "ミュート解除" : "ミュート");
@@ -1009,13 +1075,17 @@ public partial class MainWindow : Window
                 PlayPauseButton.SetValue(System.Windows.Automation.AutomationProperties.NameProperty, "再生");
                 break;
             case MediaUiState.Error:
-                Title = ApplicationTitle;
+                Title = isPlaybackError
+                    ? $"{Path.GetFileName(_currentFilePath)} — {ApplicationTitle}"
+                    : ApplicationTitle;
                 PlayPauseButton.Content = "▶";
                 PlayPauseButton.SetValue(System.Windows.Automation.AutomationProperties.NameProperty, "再生");
                 break;
         }
 
-        ReviewStateText.Text = $"MEDIA-{state.ToString().ToUpperInvariant()}";
+        ReviewStateText.Text = isPlaybackError
+            ? "MEDIA-ERROR（再生中）"
+            : $"MEDIA-{state.ToString().ToUpperInvariant()}";
 
         if (state == MediaUiState.Playing)
         {

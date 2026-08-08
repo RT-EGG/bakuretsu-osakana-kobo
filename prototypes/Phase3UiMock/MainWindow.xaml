@@ -183,6 +183,46 @@
                             Content="別の動画を開く" />
                 </StackPanel>
 
+                <Border x:Name="PlaybackErrorOverlay"
+                        Background="#C205080D"
+                        Visibility="Collapsed"
+                        AutomationProperties.Name="再生中にエラーが発生しました">
+                    <StackPanel Width="430"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center">
+                        <Border Width="62" Height="62" HorizontalAlignment="Center" Background="#3A1C28" CornerRadius="31">
+                            <TextBlock HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       FontSize="30"
+                                       FontWeight="Bold"
+                                       Foreground="{StaticResource ErrorBrush}"
+                                       Text="!" />
+                        </Border>
+                        <TextBlock Margin="0,18,0,0"
+                                   HorizontalAlignment="Center"
+                                   FontSize="22"
+                                   FontWeight="SemiBold"
+                                   Text="再生中にエラーが発生しました" />
+                        <TextBlock x:Name="PlaybackErrorMessageText"
+                                   Margin="0,8,0,6"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   Text="動画の破損により再生を続けられません。別の動画を選択してください。" />
+                        <TextBlock Margin="0,0,0,20"
+                                   HorizontalAlignment="Center"
+                                   FontSize="11"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   Text="診断用の詳細はログに記録しました。" />
+                        <Button Width="152"
+                                HorizontalAlignment="Center"
+                                Style="{StaticResource PrimaryButtonStyle}"
+                                Click="OpenFileButton_OnClick"
+                                Content="別の動画を開く" />
+                    </StackPanel>
+                </Border>
+
                 <Border x:Name="NotificationToast"
                         Width="360"
                         Margin="18"
@@ -268,6 +308,8 @@
                         Padding="0"
                         FontSize="16"
                         IsEnabled="False"
+                        ToolTip="動画を開くと再生できます"
+                        ToolTipService.ShowOnDisabled="True"
                         Click="PlayPauseButton_OnClick"
                         Content="▶"
                         AutomationProperties.Name="再生" />
@@ -281,6 +323,8 @@
                             Minimum="0"
                             Maximum="1"
                             IsEnabled="False"
+                            ToolTip="動画を開くとシークできます"
+                            ToolTipService.ShowOnDisabled="True"
                             IsMoveToPointEnabled="True"
                             PreviewMouseLeftButtonDown="SeekSlider_OnPreviewMouseLeftButtonDown"
                             PreviewMouseLeftButtonUp="SeekSlider_OnPreviewMouseLeftButtonUp"
@@ -323,6 +367,7 @@
                         Click="MuteButton_OnClick"
                         Content="🔊"
                         ToolTip="ミュート"
+                        ToolTipService.ShowOnDisabled="True"
                         AutomationProperties.Name="ミュート" />
                 <Slider x:Name="VolumeSlider"
                         Grid.Column="4"
@@ -335,6 +380,7 @@
                         IsMoveToPointEnabled="True"
                         IsEnabled="False"
                         ToolTip="音量 0～500%"
+                        ToolTipService.ShowOnDisabled="True"
                         AutomationProperties.Name="音量" />
                 <TextBlock x:Name="VolumeText"
                            Grid.Column="5"
@@ -450,6 +496,27 @@
                     <Button Margin="0,0,5,0" Padding="8,6" Tag="Error" Click="ReviewStateButton_OnClick" Content="エラー" />
                     <Button Margin="5,0,0,0" Padding="8,6" Click="OpenReviewMockButton_OnClick" Content="模擬オープン" />
                 </UniformGrid>
+                <TextBlock Margin="0,12,0,0"
+                           FontSize="11"
+                           Foreground="{StaticResource MutedTextBrush}"
+                           Text="異常系フィードバック" />
+                <ComboBox x:Name="ReviewFailureScenarioComboBox"
+                          Margin="0,5,0,0"
+                          SelectedIndex="0"
+                          AutomationProperties.Name="異常系レビューシナリオ">
+                    <ComboBoxItem Tag="MissingFileWithoutMedia" Content="欠損（動画なし）" />
+                    <ComboBoxItem Tag="AccessDeniedWithoutMedia" Content="アクセス拒否（動画なし）" />
+                    <ComboBoxItem Tag="UnsupportedFormatWithoutMedia" Content="非対応形式（動画なし）" />
+                    <ComboBoxItem Tag="UnsupportedCodecBeforeSwitch" Content="非対応コーデック（動画維持）" />
+                    <ComboBoxItem Tag="CorruptBeforeSwitch" Content="読込前に破損（動画維持）" />
+                    <ComboBoxItem Tag="CorruptDuringPlayback" Content="再生途中で破損" />
+                    <ComboBoxItem Tag="PersistenceUnavailable" Content="保存不能（再生継続）" />
+                    <ComboBoxItem Tag="CorruptSavedDataRecovered" Content="保存データ破損（復旧）" />
+                </ComboBox>
+                <Button Margin="0,6,0,0"
+                        Padding="8,6"
+                        Click="RunFailureScenarioButton_OnClick"
+                        Content="選択した異常を模擬" />
                 <TextBlock Margin="0,10,0,0"
                            FontSize="11"
                            Foreground="{StaticResource MutedTextBrush}"

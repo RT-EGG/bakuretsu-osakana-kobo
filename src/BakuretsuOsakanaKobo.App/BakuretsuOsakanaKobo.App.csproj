@@ -8,4 +8,8 @@
     <RootNamespace>BakuretsuOsakanaKobo</RootNamespace>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../BakuretsuOsakanaKobo.Infrastructure/BakuretsuOsakanaKobo.Infrastructure.csproj" />
+  </ItemGroup>
 </Project>

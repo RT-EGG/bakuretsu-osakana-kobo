@@ -17,5 +17,6 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/BakuretsuOsakanaKobo.App/BakuretsuOsakanaKobo.App.csproj" />
+    <ProjectReference Include="../../src/BakuretsuOsakanaKobo.Infrastructure/BakuretsuOsakanaKobo.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

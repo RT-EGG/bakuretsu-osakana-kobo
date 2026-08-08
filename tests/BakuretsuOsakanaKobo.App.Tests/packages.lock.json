@@ -94,6 +94,12 @@
         }
       },
       "BakuretsuOsakanaKobo": {
+        "type": "Project",
+        "dependencies": {
+          "BakuretsuOsakanaKobo.Infrastructure": "[1.0.0, )"
+        }
+      },
+      "bakuretsuosakanakobo.infrastructure": {
         "type": "Project"
       }
     }

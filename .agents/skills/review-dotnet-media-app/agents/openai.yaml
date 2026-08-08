@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review .NET Media App"
+  short_description: "Review WPF, LibVLC, audio, and release safety"
+  default_prompt: "Use $review-dotnet-media-app to review this project change for correctness, lifecycle safety, and release compliance."

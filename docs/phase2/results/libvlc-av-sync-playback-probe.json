@@ -1,0 +1,214 @@
+{
+  "StartedAt": "2026-07-29T13:06:07.5774193+00:00",
+  "FinishedAt": "2026-07-29T13:06:13.6216777+00:00",
+  "Passed": true,
+  "LibVlcVersion": "3.0.23 Vetinari",
+  "Machine": {
+    "OperatingSystem": "Microsoft Windows 10.0.26220",
+    "Framework": ".NET 10.0.9",
+    "Architecture": "X64",
+    "ProcessorCount": 24
+  },
+  "Errors": [],
+  "Files": [
+    {
+      "File": "phase2-av-sync-1920x1080-10s-60fps-h264-aac.mp4",
+      "Container": "mp4",
+      "ExpectedWidth": 1920,
+      "ExpectedHeight": 1080,
+      "ExpectedDurationSeconds": 10,
+      "ExpectedFps": 60,
+      "Passed": true,
+      "ParseStatus": "Done",
+      "ParseMilliseconds": 14.996,
+      "DurationMilliseconds": 10000,
+      "ReportedLengthMilliseconds": 10000,
+      "Video": {
+        "Codec": "h264",
+        "Width": 1920,
+        "Height": 1080,
+        "FrameRateNumerator": 60,
+        "FrameRateDenominator": 1,
+        "Channels": 0,
+        "SampleRate": 0
+      },
+      "Audio": {
+        "Codec": "mp4a",
+        "Width": 0,
+        "Height": 0,
+        "FrameRateNumerator": 0,
+        "FrameRateDenominator": 0,
+        "Channels": 2,
+        "SampleRate": 48000
+      },
+      "IsSeekable": true,
+      "CanPause": true,
+      "PauseClockDriftMilliseconds": 0,
+      "PauseResumeMilliseconds": 391.9571,
+      "PlayingEventMilliseconds": 15.6975,
+      "FirstVideoFrameMilliseconds": 846.6971,
+      "FirstAudioBlockMilliseconds": 847.0103,
+      "MiddleSeekMilliseconds": 340.7344,
+      "NearEndSeekMilliseconds": 352.8208,
+      "DecodedVideoFrames": 74,
+      "DecodedAudioBlocks": 120,
+      "DecodedAudioSamples": 122880,
+      "ElapsedMilliseconds": 2294.3111,
+      "CpuMilliseconds": 1921.875,
+      "WorkingSetBytes": 78376960,
+      "Rates": [],
+      "Volumes": [
+        {
+          "Requested": 100,
+          "Reported": 0
+        },
+        {
+          "Requested": 200,
+          "Reported": 0
+        },
+        {
+          "Requested": 300,
+          "Reported": 0
+        },
+        {
+          "Requested": 500,
+          "Reported": 0
+        }
+      ],
+      "VolumeValidation": "Informational only: callback audio output bypasses LibVLC\u0027s normal audio mixer.",
+      "Errors": []
+    },
+    {
+      "File": "phase2-av-sync-1920x1080-10s-60fps-wmv9-wma.wmv",
+      "Container": "wmv",
+      "ExpectedWidth": 1920,
+      "ExpectedHeight": 1080,
+      "ExpectedDurationSeconds": 10,
+      "ExpectedFps": 60,
+      "Passed": true,
+      "ParseStatus": "Done",
+      "ParseMilliseconds": 6.6716,
+      "DurationMilliseconds": 10037,
+      "ReportedLengthMilliseconds": 10037,
+      "Video": {
+        "Codec": "VC-1",
+        "Width": 1920,
+        "Height": 1080,
+        "FrameRateNumerator": 5000000,
+        "FrameRateDenominator": 83333,
+        "Channels": 0,
+        "SampleRate": 0
+      },
+      "Audio": {
+        "Codec": "WMAP",
+        "Width": 0,
+        "Height": 0,
+        "FrameRateNumerator": 0,
+        "FrameRateDenominator": 0,
+        "Channels": 2,
+        "SampleRate": 48000
+      },
+      "IsSeekable": true,
+      "CanPause": true,
+      "PauseClockDriftMilliseconds": 0,
+      "PauseResumeMilliseconds": 241.1196,
+      "PlayingEventMilliseconds": 826.7425,
+      "FirstVideoFrameMilliseconds": 950.6671,
+      "FirstAudioBlockMilliseconds": 950.8945,
+      "MiddleSeekMilliseconds": 1018.9852,
+      "NearEndSeekMilliseconds": 1273.7427,
+      "DecodedVideoFrames": 64,
+      "DecodedAudioBlocks": 46,
+      "DecodedAudioSamples": 94208,
+      "ElapsedMilliseconds": 3717.3993,
+      "CpuMilliseconds": 3093.75,
+      "WorkingSetBytes": 78376960,
+      "Rates": [],
+      "Volumes": [
+        {
+          "Requested": 100,
+          "Reported": 0
+        },
+        {
+          "Requested": 200,
+          "Reported": 0
+        },
+        {
+          "Requested": 300,
+          "Reported": 0
+        },
+        {
+          "Requested": 500,
+          "Reported": 0
+        }
+      ],
+      "VolumeValidation": "Informational only: callback audio output bypasses LibVLC\u0027s normal audio mixer.",
+      "Errors": []
+    }
+  ],
+  "Diagnostics": [
+    {
+      "File": "phase2-av-sync-1920x1080-10s-60fps-wmv9-wma.wmv",
+      "Level": "Warning",
+      "Module": "asf",
+      "Message": "cannot read one asf object",
+      "Count": 1
+    },
+    {
+      "File": "phase2-av-sync-1920x1080-10s-60fps-h264-aac.mp4",
+      "Level": "Warning",
+      "Module": "main",
+      "Message": "picture is too late to be displayed (missing 19 ms)",
+      "Count": 1
+    },
+    {
+      "File": "phase2-av-sync-1920x1080-10s-60fps-h264-aac.mp4",
+      "Level": "Warning",
+      "Module": "mp4",
+      "Message": "elst box found",
+      "Count": 2
+    },
+    {
+      "File": "phase2-av-sync-1920x1080-10s-60fps-h264-aac.mp4",
+      "Level": "Warning",
+      "Module": "mp4",
+      "Message": "STTS table of 1 entries",
+      "Count": 2
+    },
+    {
+      "File": "phase2-av-sync-1920x1080-10s-60fps-h264-aac.mp4",
+      "Level": "Error",
+      "Module": "main",
+      "Message": "Failed to create video converter",
+      "Count": 2
+    },
+    {
+      "File": "phase2-av-sync-1920x1080-10s-60fps-h264-aac.mp4",
+      "Level": "Error",
+      "Module": "main",
+      "Message": "Failed to set on top",
+      "Count": 3
+    },
+    {
+      "File": "phase2-av-sync-1920x1080-10s-60fps-h264-aac.mp4",
+      "Level": "Error",
+      "Module": "main",
+      "Message": "Could not convert timestamp 0 for FFmpeg",
+      "Count": 1
+    },
+    {
+      "File": "phase2-av-sync-1920x1080-10s-60fps-h264-aac.mp4",
+      "Level": "Error",
+      "Module": "main",
+      "Message": "Timestamp conversion failed for 5650001: no reference clock",
+      "Count": 1
+    },
+    {
+      "File": "phase2-av-sync-1920x1080-10s-60fps-wmv9-wma.wmv",
+      "Level": "Error",
+      "Module": "main",
+      "Message": "Failed to set on top",
+      "Count": 5
+    }
+  ]
+}

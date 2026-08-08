@@ -1,0 +1,125 @@
+<Window x:Class="BakuretsuOsakanaKobo.Spikes.WpfWindowing.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="爆裂おさかな工房 - UI・ウィンドウ技術スパイク"
+        Width="1000"
+        Height="650"
+        MinWidth="720"
+        MinHeight="480"
+        Background="#12151A"
+        Foreground="White"
+        KeyDown="Window_OnKeyDown">
+    <Grid>
+        <Border x:Name="VideoSurface"
+                Margin="12"
+                Background="#07090C"
+                BorderBrush="#323946"
+                BorderThickness="1"
+                MouseLeftButtonDown="VideoSurface_OnMouseLeftButtonDown"
+                MouseMove="VideoSurface_OnMouseMove">
+            <Border.ContextMenu>
+                <ContextMenu>
+                    <MenuItem Header="フルスクリーン切替" Click="FullScreenMenuItem_OnClick" />
+                </ContextMenu>
+            </Border.ContextMenu>
+            <Grid>
+                <Grid.Background>
+                    <RadialGradientBrush Center="0.5,0.4" GradientOrigin="0.5,0.4" RadiusX="0.75" RadiusY="0.75">
+                        <GradientStop Color="#344257" Offset="0" />
+                        <GradientStop Color="#111720" Offset="0.55" />
+                        <GradientStop Color="#07090C" Offset="1" />
+                    </RadialGradientBrush>
+                </Grid.Background>
+
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <TextBlock HorizontalAlignment="Center" FontSize="42" Text="🐟" />
+                    <TextBlock Margin="0,12,0,0"
+                               FontSize="18"
+                               Foreground="#C8D3E3"
+                               Text="モック再生バックエンド" />
+                </StackPanel>
+
+                <Border x:Name="ControlOverlay"
+                        Margin="18"
+                        Padding="14"
+                        VerticalAlignment="Bottom"
+                        Background="#D91B2028"
+                        CornerRadius="8">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <Button x:Name="PlayPauseButton"
+                                Width="88"
+                                Margin="0,0,12,0"
+                                Click="PlayPauseButton_OnClick"
+                                Content="再生" />
+                        <Slider x:Name="SeekSlider"
+                                Grid.Column="1"
+                                Minimum="0"
+                                Maximum="1"
+                                MouseMove="SeekSlider_OnMouseMove"
+                                MouseLeave="SeekSlider_OnMouseLeave"
+                                ValueChanged="SeekSlider_OnValueChanged" />
+                        <TextBlock x:Name="TimeText"
+                                   Grid.Column="2"
+                                   Width="120"
+                                   Margin="12,0,0,0"
+                                   VerticalAlignment="Center"
+                                   Text="00:00 / 02:00" />
+
+                        <StackPanel Grid.Row="1"
+                                    Grid.ColumnSpan="3"
+                                    Margin="0,12,0,0"
+                                    Orientation="Horizontal">
+                            <Button Width="120"
+                                    Margin="0,0,10,0"
+                                    Click="PlaylistButton_OnClick"
+                                    Content="プレイリスト" />
+                            <Button Width="120"
+                                    Click="FullScreenButton_OnClick"
+                                    Content="フルスクリーン" />
+                            <TextBlock Margin="16,0,0,0"
+                                       VerticalAlignment="Center"
+                                       Foreground="#AFC0D6"
+                                       Text="Alt+Enter / Esc / ダブルクリック" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Border>
+
+        <Popup x:Name="SeekPreviewPopup"
+               AllowsTransparency="True"
+               IsHitTestVisible="False"
+               Placement="Relative"
+               PlacementTarget="{Binding ElementName=SeekSlider}">
+            <Border Width="176"
+                    Padding="8"
+                    Background="#F0222730"
+                    BorderBrush="#6E819A"
+                    BorderThickness="1"
+                    CornerRadius="5">
+                <StackPanel>
+                    <Border Width="160" Height="90" Background="#344257" CornerRadius="3">
+                        <TextBlock HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   Foreground="#C8D3E3"
+                                   Text="サムネイル（モック）" />
+                    </Border>
+                    <TextBlock x:Name="SeekPreviewTimeText"
+                               Margin="0,5,0,0"
+                               HorizontalAlignment="Center"
+                               Text="00:00" />
+                </StackPanel>
+            </Border>
+        </Popup>
+    </Grid>
+</Window>

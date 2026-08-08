@@ -1,0 +1,377 @@
+{
+  "verifiedAt": "2026-07-28T22:14:47.5608072Z",
+  "expectedFiles": 16,
+  "actualFiles": 16,
+  "passed": true,
+  "errors": [],
+  "files": [
+    {
+      "file": "phase2-1920x1080-5s-30fps-h264-aac.mp4",
+      "sha256": "9C2479EF53A46D276AB82C2D6AE14C0B333A0F7E05EFCC0806B1365FC6CBAF11",
+      "sizeBytes": 616132,
+      "durationSeconds": 5.0,
+      "video": {
+        "codec": "h264",
+        "codecDescription": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+        "width": 1920,
+        "height": 1080,
+        "expectedFps": 30,
+        "packetCount": 150,
+        "pixelFormat": "yuv420p"
+      },
+      "audio": {
+        "codec": "aac",
+        "codecDescription": "AAC (Advanced Audio Coding)",
+        "sampleRate": 48000,
+        "channels": 2,
+        "maxVolumeDbfs": -0.4
+      },
+      "passed": true
+    },
+    {
+      "file": "phase2-1920x1080-5s-30fps-wmv9-wma.wmv",
+      "sha256": "146F6EB3CAAB1699DEBC7AEAF5B82F07A7674E43590FCEEB625159F569C2C472",
+      "sizeBytes": 778195,
+      "durationSeconds": 5.056,
+      "video": {
+        "codec": "vc1",
+        "codecDescription": "SMPTE VC-1",
+        "width": 1920,
+        "height": 1080,
+        "expectedFps": 30,
+        "packetCount": 150,
+        "pixelFormat": "yuv420p"
+      },
+      "audio": {
+        "codec": "wmapro",
+        "codecDescription": "Windows Media Audio 9 Professional",
+        "sampleRate": 48000,
+        "channels": 2,
+        "maxVolumeDbfs": -0.3
+      },
+      "passed": true
+    },
+    {
+      "file": "phase2-1920x1080-5s-60fps-h264-aac.mp4",
+      "sha256": "2435271104A1024490FECE8CD774B089623C48224BF4687EC5F46878F224CDE9",
+      "sizeBytes": 974743,
+      "durationSeconds": 5.0,
+      "video": {
+        "codec": "h264",
+        "codecDescription": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+        "width": 1920,
+        "height": 1080,
+        "expectedFps": 60,
+        "packetCount": 300,
+        "pixelFormat": "yuv420p"
+      },
+      "audio": {
+        "codec": "aac",
+        "codecDescription": "AAC (Advanced Audio Coding)",
+        "sampleRate": 48000,
+        "channels": 2,
+        "maxVolumeDbfs": -0.4
+      },
+      "passed": true
+    },
+    {
+      "file": "phase2-1920x1080-5s-60fps-wmv9-wma.wmv",
+      "sha256": "2969C344F3724F755EDBF9F0A4C4841ED968AB1A27EABD4364B4146E5494A109",
+      "sizeBytes": 1178195,
+      "durationSeconds": 5.056,
+      "video": {
+        "codec": "vc1",
+        "codecDescription": "SMPTE VC-1",
+        "width": 1920,
+        "height": 1080,
+        "expectedFps": 60,
+        "packetCount": 300,
+        "pixelFormat": "yuv420p"
+      },
+      "audio": {
+        "codec": "wmapro",
+        "codecDescription": "Windows Media Audio 9 Professional",
+        "sampleRate": 48000,
+        "channels": 2,
+        "maxVolumeDbfs": -0.3
+      },
+      "passed": true
+    },
+    {
+      "file": "phase2-1920x1080-60s-30fps-h264-aac.mp4",
+      "sha256": "5888B6501B477816F3D97B88F2BE76E4C49C6F7C95F5B36C3674590210CFF827",
+      "sizeBytes": 7224239,
+      "durationSeconds": 60.0,
+      "video": {
+        "codec": "h264",
+        "codecDescription": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+        "width": 1920,
+        "height": 1080,
+        "expectedFps": 30,
+        "packetCount": 1800,
+        "pixelFormat": "yuv420p"
+      },
+      "audio": {
+        "codec": "aac",
+        "codecDescription": "AAC (Advanced Audio Coding)",
+        "sampleRate": 48000,
+        "channels": 2,
+        "maxVolumeDbfs": -0.4
+      },
+      "passed": true
+    },
+    {
+      "file": "phase2-1920x1080-60s-30fps-wmv9-wma.wmv",
+      "sha256": "35A9E454577EF9FD09AE0C64EEA691978C64027745362635B75F067B5935D884",
+      "sizeBytes": 7898525,
+      "durationSeconds": 60.053,
+      "video": {
+        "codec": "vc1",
+        "codecDescription": "SMPTE VC-1",
+        "width": 1920,
+        "height": 1080,
+        "expectedFps": 30,
+        "packetCount": 1800,
+        "pixelFormat": "yuv420p"
+      },
+      "audio": {
+        "codec": "wmapro",
+        "codecDescription": "Windows Media Audio 9 Professional",
+        "sampleRate": 48000,
+        "channels": 2,
+        "maxVolumeDbfs": -0.3
+      },
+      "passed": true
+    },
+    {
+      "file": "phase2-1920x1080-60s-60fps-h264-aac.mp4",
+      "sha256": "ED551EAC44BDC69476CBB8D826E20CD645040AE6614A7C0E9BA8FE78ABC46880",
+      "sizeBytes": 11399456,
+      "durationSeconds": 60.0,
+      "video": {
+        "codec": "h264",
+        "codecDescription": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+        "width": 1920,
+        "height": 1080,
+        "expectedFps": 60,
+        "packetCount": 3600,
+        "pixelFormat": "yuv420p"
+      },
+      "audio": {
+        "codec": "aac",
+        "codecDescription": "AAC (Advanced Audio Coding)",
+        "sampleRate": 48000,
+        "channels": 2,
+        "maxVolumeDbfs": -0.4
+      },
+      "passed": true
+    },
+    {
+      "file": "phase2-1920x1080-60s-60fps-wmv9-wma.wmv",
+      "sha256": "559C80A6C3C038A6C34F70B4658418189A20351A4AEE2C4A8B6BA4D60C8DD3E6",
+      "sizeBytes": 12098525,
+      "durationSeconds": 60.053,
+      "video": {
+        "codec": "vc1",
+        "codecDescription": "SMPTE VC-1",
+        "width": 1920,
+        "height": 1080,
+        "expectedFps": 60,
+        "packetCount": 3600,
+        "pixelFormat": "yuv420p"
+      },
+      "audio": {
+        "codec": "wmapro",
+        "codecDescription": "Windows Media Audio 9 Professional",
+        "sampleRate": 48000,
+        "channels": 2,
+        "maxVolumeDbfs": -0.3
+      },
+      "passed": true
+    },
+    {
+      "file": "phase2-3840x2160-5s-30fps-h264-aac.mp4",
+      "sha256": "64E2C969DBBCFDA344332B26315ED162EA3217601A1B34B72D8A916E22A05348",
+      "sizeBytes": 1268923,
+      "durationSeconds": 5.0,
+      "video": {
+        "codec": "h264",
+        "codecDescription": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+        "width": 3840,
+        "height": 2160,
+        "expectedFps": 30,
+        "packetCount": 150,
+        "pixelFormat": "yuv420p"
+      },
+      "audio": {
+        "codec": "aac",
+        "codecDescription": "AAC (Advanced Audio Coding)",
+        "sampleRate": 48000,
+        "channels": 2,
+        "maxVolumeDbfs": -0.4
+      },
+      "passed": true
+    },
+    {
+      "file": "phase2-3840x2160-5s-30fps-wmv9-wma.wmv",
+      "sha256": "62E6876E18501FC908FC2BB74FE3C3BC4E2A9C9155BB02F78D50EBBFD769198C",
+      "sizeBytes": 1578195,
+      "durationSeconds": 5.056,
+      "video": {
+        "codec": "vc1",
+        "codecDescription": "SMPTE VC-1",
+        "width": 3840,
+        "height": 2160,
+        "expectedFps": 30,
+        "packetCount": 150,
+        "pixelFormat": "yuv420p"
+      },
+      "audio": {
+        "codec": "wmapro",
+        "codecDescription": "Windows Media Audio 9 Professional",
+        "sampleRate": 48000,
+        "channels": 2,
+        "maxVolumeDbfs": -0.3
+      },
+      "passed": true
+    },
+    {
+      "file": "phase2-3840x2160-5s-60fps-h264-aac.mp4",
+      "sha256": "0A39005F4F35512EEA35E6F83626C936C8582A387C8B0C2693ABB6AEFE811CB0",
+      "sizeBytes": 2021211,
+      "durationSeconds": 5.0,
+      "video": {
+        "codec": "h264",
+        "codecDescription": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+        "width": 3840,
+        "height": 2160,
+        "expectedFps": 60,
+        "packetCount": 300,
+        "pixelFormat": "yuv420p"
+      },
+      "audio": {
+        "codec": "aac",
+        "codecDescription": "AAC (Advanced Audio Coding)",
+        "sampleRate": 48000,
+        "channels": 2,
+        "maxVolumeDbfs": -0.4
+      },
+      "passed": true
+    },
+    {
+      "file": "phase2-3840x2160-5s-60fps-wmv9-wma.wmv",
+      "sha256": "DC6FAF3C2FADB8B058CC73C9ABBA14EE403E9852ECB98053A76E92B80CA76C27",
+      "sizeBytes": 2530195,
+      "durationSeconds": 5.056,
+      "video": {
+        "codec": "vc1",
+        "codecDescription": "SMPTE VC-1",
+        "width": 3840,
+        "height": 2160,
+        "expectedFps": 60,
+        "packetCount": 300,
+        "pixelFormat": "yuv420p"
+      },
+      "audio": {
+        "codec": "wmapro",
+        "codecDescription": "Windows Media Audio 9 Professional",
+        "sampleRate": 48000,
+        "channels": 2,
+        "maxVolumeDbfs": -0.3
+      },
+      "passed": true
+    },
+    {
+      "file": "phase2-3840x2160-60s-30fps-h264-aac.mp4",
+      "sha256": "A3662390250CB9A8F2608816BC73D369777570B0CB51856B4E6B8160DA1ADFB7",
+      "sizeBytes": 14651089,
+      "durationSeconds": 60.0,
+      "video": {
+        "codec": "h264",
+        "codecDescription": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+        "width": 3840,
+        "height": 2160,
+        "expectedFps": 30,
+        "packetCount": 1800,
+        "pixelFormat": "yuv420p"
+      },
+      "audio": {
+        "codec": "aac",
+        "codecDescription": "AAC (Advanced Audio Coding)",
+        "sampleRate": 48000,
+        "channels": 2,
+        "maxVolumeDbfs": -0.4
+      },
+      "passed": true
+    },
+    {
+      "file": "phase2-3840x2160-60s-30fps-wmv9-wma.wmv",
+      "sha256": "569DF6367FC7F078DE76ADBE5611761A0189B3CDB10EBA87432FC913F3B4E545",
+      "sizeBytes": 15986525,
+      "durationSeconds": 60.053,
+      "video": {
+        "codec": "vc1",
+        "codecDescription": "SMPTE VC-1",
+        "width": 3840,
+        "height": 2160,
+        "expectedFps": 30,
+        "packetCount": 1800,
+        "pixelFormat": "yuv420p"
+      },
+      "audio": {
+        "codec": "wmapro",
+        "codecDescription": "Windows Media Audio 9 Professional",
+        "sampleRate": 48000,
+        "channels": 2,
+        "maxVolumeDbfs": -0.3
+      },
+      "passed": true
+    },
+    {
+      "file": "phase2-3840x2160-60s-60fps-h264-aac.mp4",
+      "sha256": "506A90F787EF3BFE23F71845C8436E60DA99620100C89652B2D08E24F40568E8",
+      "sizeBytes": 23837978,
+      "durationSeconds": 60.0,
+      "video": {
+        "codec": "h264",
+        "codecDescription": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+        "width": 3840,
+        "height": 2160,
+        "expectedFps": 60,
+        "packetCount": 3600,
+        "pixelFormat": "yuv420p"
+      },
+      "audio": {
+        "codec": "aac",
+        "codecDescription": "AAC (Advanced Audio Coding)",
+        "sampleRate": 48000,
+        "channels": 2,
+        "maxVolumeDbfs": -0.4
+      },
+      "passed": true
+    },
+    {
+      "file": "phase2-3840x2160-60s-60fps-wmv9-wma.wmv",
+      "sha256": "B530C72F33D50189B0AC6DCE414B9A10DDE9B6EAFB7ADDB2AF116D03B7CA5ADD",
+      "sizeBytes": 24914525,
+      "durationSeconds": 60.053,
+      "video": {
+        "codec": "vc1",
+        "codecDescription": "SMPTE VC-1",
+        "width": 3840,
+        "height": 2160,
+        "expectedFps": 60,
+        "packetCount": 3600,
+        "pixelFormat": "yuv420p"
+      },
+      "audio": {
+        "codec": "wmapro",
+        "codecDescription": "Windows Media Audio 9 Professional",
+        "sampleRate": 48000,
+        "channels": 2,
+        "maxVolumeDbfs": -0.3
+      },
+      "passed": true
+    }
+  ]
+}

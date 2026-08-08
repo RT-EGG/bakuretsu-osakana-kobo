@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PlatformTarget>x64</PlatformTarget>
+    <Platforms>x64</Platforms>
+    <Platform>x64</Platform>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <PublishSingleFile>false</PublishSingleFile>
+    <VlcWindowsX64Enabled>true</VlcWindowsX64Enabled>
+    <VlcWindowsX86Enabled>false</VlcWindowsX86Enabled>
+    <VlcWindowsArm64Enabled>false</VlcWindowsArm64Enabled>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LibVLCSharp" Version="3.10.0" />
+    <PackageReference Include="LibVLCSharp.WPF" Version="3.10.0" />
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- VideoLAN.LibVLC.Windows 3.0.23.1 incorrectly includes this GPLv2+ encoder plug-in
+         in the package declared as LGPL. Playback does not require it. -->
+    <VlcWindowsX64ExcludeFiles Include="plugins\audio_filter\libdolby_surround_decoder_plugin.dll" />
+    <VlcWindowsX64ExcludeFiles Include="plugins\audio_filter\libheadphone_channel_mixer_plugin.dll" />
+    <VlcWindowsX64ExcludeFiles Include="plugins\codec\libx26410b_plugin.dll" />
+    <VlcWindowsX64ExcludeFiles Include="plugins\lua\liblua_plugin.dll" />
+  </ItemGroup>
+</Project>

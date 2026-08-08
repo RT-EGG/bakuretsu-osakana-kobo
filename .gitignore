@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+*.user
+*.suo
+.vs/
+.tmp/
+test-assets/generated/*.mp4
+test-assets/generated/*.wmv
+test-assets/generated/**/*.mp4
+test-assets/generated/**/*.wmv

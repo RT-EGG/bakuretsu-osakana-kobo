@@ -1,0 +1,123 @@
+{
+  "createdAt": "2026-07-28T23:19:31.9401998Z",
+  "scope": "3840x2160 60-second VC-1/WMA WMV, LibVLC software decode and callback output",
+  "runsPerFps": 5,
+  "groups": [
+    {
+      "fps": 30,
+      "runs": 5,
+      "metrics": {
+        "FirstVideoMs": {
+          "minimum": 842.4,
+          "median": 870.94,
+          "maximum": 1131.59
+        },
+        "MiddleSeekMs": {
+          "minimum": 1981.9,
+          "median": 2130.83,
+          "maximum": 2341.41
+        },
+        "NearEndSeekMs": {
+          "minimum": 2672.63,
+          "median": 2728.28,
+          "maximum": 2752.94
+        }
+      },
+      "samples": [
+        {
+          "Run": "full",
+          "FPS": 30,
+          "FirstVideoMs": 1131.5865,
+          "MiddleSeekMs": 2341.4126,
+          "NearEndSeekMs": 2728.2849
+        },
+        {
+          "Run": "repeat-1",
+          "FPS": 30,
+          "FirstVideoMs": 855.6401,
+          "MiddleSeekMs": 1981.9012,
+          "NearEndSeekMs": 2734.2794
+        },
+        {
+          "Run": "repeat-2",
+          "FPS": 30,
+          "FirstVideoMs": 870.938,
+          "MiddleSeekMs": 2176.5316,
+          "NearEndSeekMs": 2752.9403
+        },
+        {
+          "Run": "repeat-3",
+          "FPS": 30,
+          "FirstVideoMs": 877.1023,
+          "MiddleSeekMs": 2130.8327,
+          "NearEndSeekMs": 2672.6322
+        },
+        {
+          "Run": "repeat-4",
+          "FPS": 30,
+          "FirstVideoMs": 842.399,
+          "MiddleSeekMs": 2108.5435,
+          "NearEndSeekMs": 2714.0016
+        }
+      ]
+    },
+    {
+      "fps": 60,
+      "runs": 5,
+      "metrics": {
+        "FirstVideoMs": {
+          "minimum": 1116.55,
+          "median": 1158.93,
+          "maximum": 1169.39
+        },
+        "MiddleSeekMs": {
+          "minimum": 4209.57,
+          "median": 4442.26,
+          "maximum": 4492.27
+        },
+        "NearEndSeekMs": {
+          "minimum": 4939.96,
+          "median": 4972.41,
+          "maximum": 5183.39
+        }
+      },
+      "samples": [
+        {
+          "Run": "full",
+          "FPS": 60,
+          "FirstVideoMs": 1166.5473,
+          "MiddleSeekMs": 4492.2715,
+          "NearEndSeekMs": 5183.3898
+        },
+        {
+          "Run": "repeat-1",
+          "FPS": 60,
+          "FirstVideoMs": 1169.3885,
+          "MiddleSeekMs": 4442.2601,
+          "NearEndSeekMs": 4970.3281
+        },
+        {
+          "Run": "repeat-2",
+          "FPS": 60,
+          "FirstVideoMs": 1116.5548,
+          "MiddleSeekMs": 4489.7998,
+          "NearEndSeekMs": 5089.9818
+        },
+        {
+          "Run": "repeat-3",
+          "FPS": 60,
+          "FirstVideoMs": 1158.9321,
+          "MiddleSeekMs": 4209.567,
+          "NearEndSeekMs": 4972.4142
+        },
+        {
+          "Run": "repeat-4",
+          "FPS": 60,
+          "FirstVideoMs": 1146.0775,
+          "MiddleSeekMs": 4304.2425,
+          "NearEndSeekMs": 4939.9629
+        }
+      ]
+    }
+  ]
+}

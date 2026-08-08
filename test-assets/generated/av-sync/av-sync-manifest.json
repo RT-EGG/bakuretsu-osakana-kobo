@@ -1,0 +1,38 @@
+{
+  "generatedAt": "2026-07-29T12:56:10.1405469Z",
+  "purpose": "A/V sync, channel identification, and seek-to-zero restart validation.",
+  "timing": {
+    "preRollSeconds": 0.5,
+    "pulseDurationSeconds": 0.08,
+    "leftPulseSeconds": "0.5, 1.5, 2.5, ...",
+    "rightPulseSeconds": "1.0, 2.0, 3.0, ...",
+    "visualCue": "The matching left or right half flashes for the complete audio pulse."
+  },
+  "generator": {
+    "ffmpegVersion": "ffmpeg version N-125781-gacf6b520c1-20260727 Copyright (c) 2000-2026 the FFmpeg developers",
+    "configuration": "configuration: --prefix=/ffbuild/prefix --pkg-config-flags=--static --pkg-config=pkg-config --cross-prefix=x86_64-w64-mingw32- --arch=x86_64 --target-os=mingw32 --enable-version3 --disable-debug --enable-shared --disable-static --disable-w32threads --enable-pthreads --enable-iconv --enable-zlib --enable-libxml2 --enable-libvmaf --enable-fontconfig --enable-libharfbuzz --enable-libfreetype --enable-libfribidi --enable-vulkan --enable-libvorbis --disable-libxcb --disable-xlib --disable-libpulse --enable-gmp --enable-lzma --enable-liblcevc-dec --enable-opencl --enable-amf --enable-libaom --enable-libaribb24 --disable-avisynth --enable-chromaprint --enable-libdav1d --disable-libdavs2 --disable-libdvdread --disable-libdvdnav --disable-libfdk-aac --enable-ffnvcodec --enable-cuda-llvm --disable-frei0r --enable-libgme --enable-libkvazaar --enable-libaribcaption --enable-libass --enable-libbluray --enable-libjxl --enable-libmp3lame --enable-libopus --enable-libplacebo --enable-librist --enable-libssh --enable-libtheora --enable-libvpx --enable-libwebp --enable-libzmq --enable-lv2 --enable-libvpl --enable-openal --enable-liboapv --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenh264 --enable-libopenjpeg --enable-libopenmpt --enable-librav1e --disable-librubberband --enable-schannel --enable-sdl2 --enable-libsnappy --enable-libsoxr --enable-libsrt --enable-libsvtav1 --enable-libtwolame --enable-libuavs3d --disable-libdrm --enable-vaapi --disable-libvidstab --enable-libvvenc --disable-whisper --disable-libx264 --disable-libx265 --disable-libxavs2 --disable-libxvid --enable-libzimg --enable-libzvbi --extra-cflags=-DLIBTWOLAME_STATIC --extra-cxxflags= --extra-libs=-lgomp --extra-ldflags=-pthread --extra-ldexeflags= --cc=x86_64-w64-mingw32-gcc --cxx=x86_64-w64-mingw32-g++ --ar=x86_64-w64-mingw32-gcc-ar --ranlib=x86_64-w64-mingw32-gcc-ranlib --nm=x86_64-w64-mingw32-gcc-nm --extra-version=20260727",
+    "ffmpegExecutableSha256": "15D736F24C54DBA2AB2B8DA8E207190519155C009DADDB338F0B4BBE6DE5A99B",
+    "archiveSha256": "E21E3CC4B4BEDE7CB341956EE0702AEDF2F61942D94093AE81B41A2C0FA8C51D",
+    "source": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl-shared.zip",
+    "distribution": "Generation-only tool; not included in application or repository."
+  },
+  "file": {
+    "name": "phase2-av-sync-1920x1080-10s-60fps-h264-aac.mp4",
+    "sha256": "FDCF843533BE8F1B66087A55EF10EB2ECB3FA6C5F2B3B3AB2ECA04EA25017E58",
+    "sizeBytes": 2890431,
+    "durationSeconds": 10.0,
+    "video": {
+      "codec": "h264",
+      "width": 1920,
+      "height": 1080,
+      "frameRate": "60/1",
+      "packetCount": 600,
+      "pixelFormat": "yuv420p"
+    },
+    "audio": {
+      "codec": "aac",
+      "sampleRate": 48000,
+      "channels": 2
+    }
+  }
+}

@@ -1,0 +1,24 @@
+<Window x:Class="BakuretsuOsakanaKobo.Spikes.WpfWindowing.PlaylistWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="プレイリスト - 技術スパイク"
+        Width="360"
+        Height="420"
+        MinWidth="280"
+        MinHeight="260"
+        Background="#20242B"
+        Foreground="White"
+        ShowInTaskbar="False">
+    <DockPanel Margin="16">
+        <TextBlock DockPanel.Dock="Top"
+                   Margin="0,0,0,12"
+                   FontSize="18"
+                   FontWeight="SemiBold"
+                   Text="別ウィンドウ検証" />
+        <ListBox AutomationProperties.Name="プレイリスト項目">
+            <ListBoxItem Content="01  サンプル動画.mp4" />
+            <ListBoxItem Content="02  サンプル動画.wmv" />
+            <ListBoxItem Content="03  欠損ファイル（モック）" IsEnabled="False" />
+        </ListBox>
+    </DockPanel>
+</Window>

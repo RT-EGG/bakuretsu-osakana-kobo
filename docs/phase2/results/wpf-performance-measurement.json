@@ -1,0 +1,1052 @@
+{
+  "generatedAt": "2026-08-01T12:29:03.8115703+09:00",
+  "measurementDefinition": {
+    "coldCondition": "Each run starts a new WPF process. Windows file-system cache is not flushed; run 1 is retained and runs 2-5 may use an OS-warm cache.",
+    "videoReady": "Later of LibVLC Vout-created and playback-clock >= 100 ms. Prior PrintWindow validation establishes that this Vout is connected to the WPF VideoView; this is an event proxy, not a photodiode measurement.",
+    "seekReady": "Time from Position assignment until the playback clock reaches seek target + 100 ms.",
+    "cpu": "Process CPU, normalized to all logical processors, sampled approximately every 200 ms.",
+    "gpu": "Whole NVIDIA GPU and video-decoder utilization from nvidia-smi; other desktop activity may contribute.",
+    "resourceWindow": "A 2-second idle window after Dispatcher-ready and a separate 3-second steady-playback window before seeks; startup/seek aggregate maxima are retained separately."
+  },
+  "baselinePc": {
+    "motherboard": "To Be Filled By O.E.M. X570 Steel Legend",
+    "cpu": "AMD Ryzen 9 5900X 12-Core Processor",
+    "logicalProcessors": 24,
+    "physicalMemoryBytes": 68642639872,
+    "gpu": "NVIDIA GeForce RTX 3070 Ti",
+    "gpuDriverVersion": "32.0.15.9186",
+    "os": "Microsoft Windows 11 Home Insider Preview 10.0.26220 build 26220",
+    "dotnetSdk": "10.0.301",
+    "windowsDesktopRuntime": "Microsoft.WindowsDesktop.App 10.0.9 [C:\\Program Files\\dotnet\\shared\\Microsoft.WindowsDesktop.App]",
+    "powerScheme": "電源設定の GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (バランス)",
+    "mediaStorage": "StoreJet Transcend, USB, NTFS",
+    "displays": [
+      {
+        "name": "\\\\.\\DISPLAY1",
+        "primary": true,
+        "bounds": "{X=0,Y=0,Width=1920,Height=1080}"
+      },
+      {
+        "name": "\\\\.\\DISPLAY2",
+        "primary": false,
+        "bounds": "{X=1920,Y=12,Width=2560,Height=1440}"
+      },
+      {
+        "name": "\\\\.\\DISPLAY3",
+        "primary": false,
+        "bounds": "{X=0,Y=1080,Width=1280,Height=720}"
+      }
+    ]
+  },
+  "conditions": [
+    {
+      "id": "mp4-1080p60-60s",
+      "video": "test-assets\\generated\\phase2-1920x1080-60s-60fps-h264-aac.mp4"
+    },
+    {
+      "id": "mp4-4k60-60s",
+      "video": "test-assets\\generated\\phase2-3840x2160-60s-60fps-h264-aac.mp4"
+    },
+    {
+      "id": "wmv-1080p60-60s",
+      "video": "test-assets\\generated\\phase2-1920x1080-60s-60fps-wmv9-wma.wmv"
+    }
+  ],
+  "runs": [
+    {
+      "condition": "mp4-1080p60-60s",
+      "run": 1,
+      "processExitCode": 0,
+      "app": {
+        "Success": true,
+        "VideoPath": "Z:\\projects\\bakuretsu-osakana-kobo\\test-assets\\generated\\phase2-1920x1080-60s-60fps-h264-aac.mp4",
+        "Error": null,
+        "HardwareDecoder": "d3d11va",
+        "ProcessStartToWindowLoadedMs": 955.9278,
+        "ProcessStartToDispatcherReadyMs": 1111.4994,
+        "OpenRequestedProcessElapsedMs": 3116.1074,
+        "PlaybackReadyProcessElapsedMs": 3526.5097,
+        "IdleSamplingDelayMs": 2000,
+        "PlaybackSamplingDelayMs": 3000,
+        "OpenToPlayingMs": 15.3683,
+        "OpenToFirstPlaybackClockMs": 410.4023,
+        "OpenToVideoOutputMs": 199.6334,
+        "OpenToAudioOutputMs": 27.8556,
+        "Seek50PercentMs": 438.2546000000002,
+        "Seek90PercentMs": 766.5423000000001,
+        "RateAccepted": true,
+        "RateChangeReflectMs": 1.1488,
+        "ObservedRate": 1.5,
+        "VolumeChangeReflectMs": 0.1903,
+        "ObservedVolumePercent": 50,
+        "WorkingSetBytes": 345804800,
+        "PeakWorkingSetBytes": 345849856
+      },
+      "processCpuPercentAverage": 1.431,
+      "processCpuPercentMaximum": 4.691,
+      "systemGpuPercentAverage": 0.0,
+      "systemGpuPercentMaximum": 0.0,
+      "systemGpuDecoderPercentAverage": 0.0,
+      "systemGpuDecoderPercentMaximum": 0.0,
+      "sampledWorkingSetBytesMaximum": 344444928,
+      "idleCpuPercentAverage": 0.253,
+      "idleGpuPercentAverage": 0.0,
+      "idleGpuDecoderPercentAverage": 0.0,
+      "idleWorkingSetMiBAverage": 160.843,
+      "playbackCpuPercentAverage": 1.127,
+      "playbackCpuPercentMaximum": 2.334,
+      "playbackGpuPercentAverage": 0.0,
+      "playbackGpuDecoderPercentAverage": 0.0,
+      "playbackWorkingSetMiBAverage": 287.149
+    },
+    {
+      "condition": "mp4-1080p60-60s",
+      "run": 2,
+      "processExitCode": 0,
+      "app": {
+        "Success": true,
+        "VideoPath": "Z:\\projects\\bakuretsu-osakana-kobo\\test-assets\\generated\\phase2-1920x1080-60s-60fps-h264-aac.mp4",
+        "Error": null,
+        "HardwareDecoder": "d3d11va",
+        "ProcessStartToWindowLoadedMs": 973.1108,
+        "ProcessStartToDispatcherReadyMs": 1084.8017,
+        "OpenRequestedProcessElapsedMs": 3091.6925,
+        "PlaybackReadyProcessElapsedMs": 3799.4417000000003,
+        "IdleSamplingDelayMs": 2000,
+        "PlaybackSamplingDelayMs": 3000,
+        "OpenToPlayingMs": 14.7629,
+        "OpenToFirstPlaybackClockMs": 707.7492,
+        "OpenToVideoOutputMs": 243.9857,
+        "OpenToAudioOutputMs": 27.2889,
+        "Seek50PercentMs": 462.6255000000001,
+        "Seek90PercentMs": 765.3091999999997,
+        "RateAccepted": true,
+        "RateChangeReflectMs": 1.149,
+        "ObservedRate": 1.5,
+        "VolumeChangeReflectMs": 0.1857,
+        "ObservedVolumePercent": 50,
+        "WorkingSetBytes": 343154688,
+        "PeakWorkingSetBytes": 343187456
+      },
+      "processCpuPercentAverage": 1.463,
+      "processCpuPercentMaximum": 4.341,
+      "systemGpuPercentAverage": 0.0,
+      "systemGpuPercentMaximum": 0.0,
+      "systemGpuDecoderPercentAverage": 0.0,
+      "systemGpuDecoderPercentMaximum": 0.0,
+      "sampledWorkingSetBytesMaximum": 342921216,
+      "idleCpuPercentAverage": 0.139,
+      "idleGpuPercentAverage": 0.0,
+      "idleGpuDecoderPercentAverage": 0.0,
+      "idleWorkingSetMiBAverage": 160.54,
+      "playbackCpuPercentAverage": 0.864,
+      "playbackCpuPercentMaximum": 2.821,
+      "playbackGpuPercentAverage": 0.0,
+      "playbackGpuDecoderPercentAverage": 0.0,
+      "playbackWorkingSetMiBAverage": 288.648
+    },
+    {
+      "condition": "mp4-1080p60-60s",
+      "run": 3,
+      "processExitCode": 0,
+      "app": {
+        "Success": true,
+        "VideoPath": "Z:\\projects\\bakuretsu-osakana-kobo\\test-assets\\generated\\phase2-1920x1080-60s-60fps-h264-aac.mp4",
+        "Error": null,
+        "HardwareDecoder": "d3d11va",
+        "ProcessStartToWindowLoadedMs": 1029.2232,
+        "ProcessStartToDispatcherReadyMs": 1173.0537,
+        "OpenRequestedProcessElapsedMs": 3178.8088,
+        "PlaybackReadyProcessElapsedMs": 3863.0094999999997,
+        "IdleSamplingDelayMs": 2000,
+        "PlaybackSamplingDelayMs": 3000,
+        "OpenToPlayingMs": 15.3049,
+        "OpenToFirstPlaybackClockMs": 684.2007,
+        "OpenToVideoOutputMs": 219.6318,
+        "OpenToAudioOutputMs": 28.4191,
+        "Seek50PercentMs": 447.31870000000026,
+        "Seek90PercentMs": 676.3690999999999,
+        "RateAccepted": true,
+        "RateChangeReflectMs": 0.8806,
+        "ObservedRate": 1.5,
+        "VolumeChangeReflectMs": 0.191,
+        "ObservedVolumePercent": 50,
+        "WorkingSetBytes": 337932288,
+        "PeakWorkingSetBytes": 338436096
+      },
+      "processCpuPercentAverage": 1.379,
+      "processCpuPercentMaximum": 5.163,
+      "systemGpuPercentAverage": 0.0,
+      "systemGpuPercentMaximum": 0.0,
+      "systemGpuDecoderPercentAverage": 0.0,
+      "systemGpuDecoderPercentMaximum": 0.0,
+      "sampledWorkingSetBytesMaximum": 336551936,
+      "idleCpuPercentAverage": 0.236,
+      "idleGpuPercentAverage": 0.0,
+      "idleGpuDecoderPercentAverage": 0.0,
+      "idleWorkingSetMiBAverage": 160.898,
+      "playbackCpuPercentAverage": 0.783,
+      "playbackCpuPercentMaximum": 1.632,
+      "playbackGpuPercentAverage": 0.0,
+      "playbackGpuDecoderPercentAverage": 0.0,
+      "playbackWorkingSetMiBAverage": 280.972
+    },
+    {
+      "condition": "mp4-1080p60-60s",
+      "run": 4,
+      "processExitCode": 0,
+      "app": {
+        "Success": true,
+        "VideoPath": "Z:\\projects\\bakuretsu-osakana-kobo\\test-assets\\generated\\phase2-1920x1080-60s-60fps-h264-aac.mp4",
+        "Error": null,
+        "HardwareDecoder": "d3d11va",
+        "ProcessStartToWindowLoadedMs": 902.8891,
+        "ProcessStartToDispatcherReadyMs": 1011.4066,
+        "OpenRequestedProcessElapsedMs": 3016.2001,
+        "PlaybackReadyProcessElapsedMs": 3431.1736,
+        "IdleSamplingDelayMs": 2000,
+        "PlaybackSamplingDelayMs": 3000,
+        "OpenToPlayingMs": 13.9111,
+        "OpenToFirstPlaybackClockMs": 414.9735,
+        "OpenToVideoOutputMs": 206.8376,
+        "OpenToAudioOutputMs": 25.6364,
+        "Seek50PercentMs": 461.03279999999995,
+        "Seek90PercentMs": 697.7194,
+        "RateAccepted": true,
+        "RateChangeReflectMs": 0.8336,
+        "ObservedRate": 1.5,
+        "VolumeChangeReflectMs": 0.1604,
+        "ObservedVolumePercent": 50,
+        "WorkingSetBytes": 348405760,
+        "PeakWorkingSetBytes": 348438528
+      },
+      "processCpuPercentAverage": 1.496,
+      "processCpuPercentMaximum": 5.129,
+      "systemGpuPercentAverage": 0.0,
+      "systemGpuPercentMaximum": 0.0,
+      "systemGpuDecoderPercentAverage": 0.0,
+      "systemGpuDecoderPercentMaximum": 0.0,
+      "sampledWorkingSetBytesMaximum": 347475968,
+      "idleCpuPercentAverage": 0.408,
+      "idleGpuPercentAverage": 0.0,
+      "idleGpuDecoderPercentAverage": 0.0,
+      "idleWorkingSetMiBAverage": 164.481,
+      "playbackCpuPercentAverage": 1.059,
+      "playbackCpuPercentMaximum": 2.344,
+      "playbackGpuPercentAverage": 0.0,
+      "playbackGpuDecoderPercentAverage": 0.0,
+      "playbackWorkingSetMiBAverage": 283.483
+    },
+    {
+      "condition": "mp4-1080p60-60s",
+      "run": 5,
+      "processExitCode": 0,
+      "app": {
+        "Success": true,
+        "VideoPath": "Z:\\projects\\bakuretsu-osakana-kobo\\test-assets\\generated\\phase2-1920x1080-60s-60fps-h264-aac.mp4",
+        "Error": null,
+        "HardwareDecoder": "d3d11va",
+        "ProcessStartToWindowLoadedMs": 936.472,
+        "ProcessStartToDispatcherReadyMs": 1053.9959,
+        "OpenRequestedProcessElapsedMs": 3060.4577,
+        "PlaybackReadyProcessElapsedMs": 3760.8358,
+        "IdleSamplingDelayMs": 2000,
+        "PlaybackSamplingDelayMs": 3000,
+        "OpenToPlayingMs": 13.5789,
+        "OpenToFirstPlaybackClockMs": 700.3781,
+        "OpenToVideoOutputMs": 240.9239,
+        "OpenToAudioOutputMs": 25.3189,
+        "Seek50PercentMs": 441.1107000000002,
+        "Seek90PercentMs": 751.3104999999996,
+        "RateAccepted": true,
+        "RateChangeReflectMs": 1.316,
+        "ObservedRate": 1.5,
+        "VolumeChangeReflectMs": 0.1649,
+        "ObservedVolumePercent": 50,
+        "WorkingSetBytes": 342208512,
+        "PeakWorkingSetBytes": 342249472
+      },
+      "processCpuPercentAverage": 1.403,
+      "processCpuPercentMaximum": 5.101,
+      "systemGpuPercentAverage": 0.0,
+      "systemGpuPercentMaximum": 0.0,
+      "systemGpuDecoderPercentAverage": 0.0,
+      "systemGpuDecoderPercentMaximum": 0.0,
+      "sampledWorkingSetBytesMaximum": 340860928,
+      "idleCpuPercentAverage": 0.221,
+      "idleGpuPercentAverage": 0.0,
+      "idleGpuDecoderPercentAverage": 0.0,
+      "idleWorkingSetMiBAverage": 160.567,
+      "playbackCpuPercentAverage": 1.075,
+      "playbackCpuPercentMaximum": 2.081,
+      "playbackGpuPercentAverage": 0.0,
+      "playbackGpuDecoderPercentAverage": 0.0,
+      "playbackWorkingSetMiBAverage": 281.819
+    },
+    {
+      "condition": "mp4-4k60-60s",
+      "run": 1,
+      "processExitCode": 0,
+      "app": {
+        "Success": true,
+        "VideoPath": "Z:\\projects\\bakuretsu-osakana-kobo\\test-assets\\generated\\phase2-3840x2160-60s-60fps-h264-aac.mp4",
+        "Error": null,
+        "HardwareDecoder": "d3d11va",
+        "ProcessStartToWindowLoadedMs": 853.4171,
+        "ProcessStartToDispatcherReadyMs": 958.5367,
+        "OpenRequestedProcessElapsedMs": 2962.7329,
+        "PlaybackReadyProcessElapsedMs": 3665.5964,
+        "IdleSamplingDelayMs": 2000,
+        "PlaybackSamplingDelayMs": 3000,
+        "OpenToPlayingMs": 10.5632,
+        "OpenToFirstPlaybackClockMs": 702.8635,
+        "OpenToVideoOutputMs": 213.2281,
+        "OpenToAudioOutputMs": 22.3458,
+        "Seek50PercentMs": 450.9413999999997,
+        "Seek90PercentMs": 1068.3015000000005,
+        "RateAccepted": true,
+        "RateChangeReflectMs": 0.8525,
+        "ObservedRate": 1.5,
+        "VolumeChangeReflectMs": 0.1735,
+        "ObservedVolumePercent": 50,
+        "WorkingSetBytes": 567246848,
+        "PeakWorkingSetBytes": 567287808
+      },
+      "processCpuPercentAverage": 1.783,
+      "processCpuPercentMaximum": 5.493,
+      "systemGpuPercentAverage": 0.0,
+      "systemGpuPercentMaximum": 0.0,
+      "systemGpuDecoderPercentAverage": 0.0,
+      "systemGpuDecoderPercentMaximum": 0.0,
+      "sampledWorkingSetBytesMaximum": 565817344,
+      "idleCpuPercentAverage": 1.36,
+      "idleGpuPercentAverage": 0.0,
+      "idleGpuDecoderPercentAverage": 0.0,
+      "idleWorkingSetMiBAverage": 167.655,
+      "playbackCpuPercentAverage": 0.659,
+      "playbackCpuPercentMaximum": 1.807,
+      "playbackGpuPercentAverage": 0.0,
+      "playbackGpuDecoderPercentAverage": 0.0,
+      "playbackWorkingSetMiBAverage": 495.22
+    },
+    {
+      "condition": "mp4-4k60-60s",
+      "run": 2,
+      "processExitCode": 0,
+      "app": {
+        "Success": true,
+        "VideoPath": "Z:\\projects\\bakuretsu-osakana-kobo\\test-assets\\generated\\phase2-3840x2160-60s-60fps-h264-aac.mp4",
+        "Error": null,
+        "HardwareDecoder": "d3d11va",
+        "ProcessStartToWindowLoadedMs": 1049.9688,
+        "ProcessStartToDispatcherReadyMs": 1196.1249,
+        "OpenRequestedProcessElapsedMs": 3200.3937,
+        "PlaybackReadyProcessElapsedMs": 3597.6237,
+        "IdleSamplingDelayMs": 2000,
+        "PlaybackSamplingDelayMs": 3000,
+        "OpenToPlayingMs": 10.6665,
+        "OpenToFirstPlaybackClockMs": 397.23,
+        "OpenToVideoOutputMs": 171.4978,
+        "OpenToAudioOutputMs": 22.7571,
+        "Seek50PercentMs": 455.50649999999996,
+        "Seek90PercentMs": 1040.1006999999995,
+        "RateAccepted": true,
+        "RateChangeReflectMs": 1.0105,
+        "ObservedRate": 1.5,
+        "VolumeChangeReflectMs": 0.1642,
+        "ObservedVolumePercent": 50,
+        "WorkingSetBytes": 552230912,
+        "PeakWorkingSetBytes": 552280064
+      },
+      "processCpuPercentAverage": 1.658,
+      "processCpuPercentMaximum": 5.47,
+      "systemGpuPercentAverage": 0.0,
+      "systemGpuPercentMaximum": 0.0,
+      "systemGpuDecoderPercentAverage": 0.0,
+      "systemGpuDecoderPercentMaximum": 0.0,
+      "sampledWorkingSetBytesMaximum": 550813696,
+      "idleCpuPercentAverage": 0.373,
+      "idleGpuPercentAverage": 0.0,
+      "idleGpuDecoderPercentAverage": 0.0,
+      "idleWorkingSetMiBAverage": 162.65,
+      "playbackCpuPercentAverage": 1.08,
+      "playbackCpuPercentMaximum": 2.978,
+      "playbackGpuPercentAverage": 0.0,
+      "playbackGpuDecoderPercentAverage": 0.0,
+      "playbackWorkingSetMiBAverage": 491.915
+    },
+    {
+      "condition": "mp4-4k60-60s",
+      "run": 3,
+      "processExitCode": 0,
+      "app": {
+        "Success": true,
+        "VideoPath": "Z:\\projects\\bakuretsu-osakana-kobo\\test-assets\\generated\\phase2-3840x2160-60s-60fps-h264-aac.mp4",
+        "Error": null,
+        "HardwareDecoder": "d3d11va",
+        "ProcessStartToWindowLoadedMs": 961.7911,
+        "ProcessStartToDispatcherReadyMs": 1112.9149,
+        "OpenRequestedProcessElapsedMs": 3116.6032,
+        "PlaybackReadyProcessElapsedMs": 3832.6385,
+        "IdleSamplingDelayMs": 2000,
+        "PlaybackSamplingDelayMs": 3000,
+        "OpenToPlayingMs": 14.4488,
+        "OpenToFirstPlaybackClockMs": 716.0353,
+        "OpenToVideoOutputMs": 234.8773,
+        "OpenToAudioOutputMs": 26.4091,
+        "Seek50PercentMs": 441.6844999999994,
+        "Seek90PercentMs": 1027.3743999999997,
+        "RateAccepted": true,
+        "RateChangeReflectMs": 1.0258,
+        "ObservedRate": 1.5,
+        "VolumeChangeReflectMs": 0.1637,
+        "ObservedVolumePercent": 50,
+        "WorkingSetBytes": 551903232,
+        "PeakWorkingSetBytes": 551948288
+      },
+      "processCpuPercentAverage": 1.784,
+      "processCpuPercentMaximum": 6.268,
+      "systemGpuPercentAverage": 0.0,
+      "systemGpuPercentMaximum": 0.0,
+      "systemGpuDecoderPercentAverage": 0.0,
+      "systemGpuDecoderPercentMaximum": 0.0,
+      "sampledWorkingSetBytesMaximum": 550477824,
+      "idleCpuPercentAverage": 1.285,
+      "idleGpuPercentAverage": 0.0,
+      "idleGpuDecoderPercentAverage": 0.0,
+      "idleWorkingSetMiBAverage": 165.133,
+      "playbackCpuPercentAverage": 0.738,
+      "playbackCpuPercentMaximum": 2.088,
+      "playbackGpuPercentAverage": 0.0,
+      "playbackGpuDecoderPercentAverage": 0.0,
+      "playbackWorkingSetMiBAverage": 492.206
+    },
+    {
+      "condition": "mp4-4k60-60s",
+      "run": 4,
+      "processExitCode": 0,
+      "app": {
+        "Success": true,
+        "VideoPath": "Z:\\projects\\bakuretsu-osakana-kobo\\test-assets\\generated\\phase2-3840x2160-60s-60fps-h264-aac.mp4",
+        "Error": null,
+        "HardwareDecoder": "d3d11va",
+        "ProcessStartToWindowLoadedMs": 893.1956,
+        "ProcessStartToDispatcherReadyMs": 992.4643,
+        "OpenRequestedProcessElapsedMs": 2996.8854,
+        "PlaybackReadyProcessElapsedMs": 3702.3177,
+        "IdleSamplingDelayMs": 2000,
+        "PlaybackSamplingDelayMs": 3000,
+        "OpenToPlayingMs": 11.3249,
+        "OpenToFirstPlaybackClockMs": 705.4323,
+        "OpenToVideoOutputMs": 224.8131,
+        "OpenToAudioOutputMs": 25.3944,
+        "Seek50PercentMs": 452.17740000000003,
+        "Seek90PercentMs": 1047.3896000000004,
+        "RateAccepted": true,
+        "RateChangeReflectMs": 0.8733,
+        "ObservedRate": 1.5,
+        "VolumeChangeReflectMs": 0.2306,
+        "ObservedVolumePercent": 50,
+        "WorkingSetBytes": 592695296,
+        "PeakWorkingSetBytes": 592736256
+      },
+      "processCpuPercentAverage": 1.69,
+      "processCpuPercentMaximum": 7.36,
+      "systemGpuPercentAverage": 0.0,
+      "systemGpuPercentMaximum": 0.0,
+      "systemGpuDecoderPercentAverage": 0.0,
+      "systemGpuDecoderPercentMaximum": 0.0,
+      "sampledWorkingSetBytesMaximum": 591355904,
+      "idleCpuPercentAverage": 0.097,
+      "idleGpuPercentAverage": 0.0,
+      "idleGpuDecoderPercentAverage": 0.0,
+      "idleWorkingSetMiBAverage": 164.483,
+      "playbackCpuPercentAverage": 0.908,
+      "playbackCpuPercentMaximum": 2.461,
+      "playbackGpuPercentAverage": 0.0,
+      "playbackGpuDecoderPercentAverage": 0.0,
+      "playbackWorkingSetMiBAverage": 493.788
+    },
+    {
+      "condition": "mp4-4k60-60s",
+      "run": 5,
+      "processExitCode": 0,
+      "app": {
+        "Success": true,
+        "VideoPath": "Z:\\projects\\bakuretsu-osakana-kobo\\test-assets\\generated\\phase2-3840x2160-60s-60fps-h264-aac.mp4",
+        "Error": null,
+        "HardwareDecoder": "d3d11va",
+        "ProcessStartToWindowLoadedMs": 922.1353,
+        "ProcessStartToDispatcherReadyMs": 1044.0138,
+        "OpenRequestedProcessElapsedMs": 3048.8389,
+        "PlaybackReadyProcessElapsedMs": 3767.8013,
+        "IdleSamplingDelayMs": 2000,
+        "PlaybackSamplingDelayMs": 3000,
+        "OpenToPlayingMs": 15.2623,
+        "OpenToFirstPlaybackClockMs": 718.9624,
+        "OpenToVideoOutputMs": 236.7805,
+        "OpenToAudioOutputMs": 27.3859,
+        "Seek50PercentMs": 457.4726000000005,
+        "Seek90PercentMs": 935.5018,
+        "RateAccepted": true,
+        "RateChangeReflectMs": 0.9427,
+        "ObservedRate": 1.5,
+        "VolumeChangeReflectMs": 0.2321,
+        "ObservedVolumePercent": 50,
+        "WorkingSetBytes": 549273600,
+        "PeakWorkingSetBytes": 549318656
+      },
+      "processCpuPercentAverage": 1.826,
+      "processCpuPercentMaximum": 5.232,
+      "systemGpuPercentAverage": 0.0,
+      "systemGpuPercentMaximum": 0.0,
+      "systemGpuDecoderPercentAverage": 0.0,
+      "systemGpuDecoderPercentMaximum": 0.0,
+      "sampledWorkingSetBytesMaximum": 549273600,
+      "idleCpuPercentAverage": 1.069,
+      "idleGpuPercentAverage": 0.0,
+      "idleGpuDecoderPercentAverage": 0.0,
+      "idleWorkingSetMiBAverage": 165.297,
+      "playbackCpuPercentAverage": 1.05,
+      "playbackCpuPercentMaximum": 1.823,
+      "playbackGpuPercentAverage": 0.0,
+      "playbackGpuDecoderPercentAverage": 0.0,
+      "playbackWorkingSetMiBAverage": 491.258
+    },
+    {
+      "condition": "wmv-1080p60-60s",
+      "run": 1,
+      "processExitCode": 0,
+      "app": {
+        "Success": true,
+        "VideoPath": "Z:\\projects\\bakuretsu-osakana-kobo\\test-assets\\generated\\phase2-1920x1080-60s-60fps-wmv9-wma.wmv",
+        "Error": null,
+        "HardwareDecoder": "d3d11va",
+        "ProcessStartToWindowLoadedMs": 904.2223,
+        "ProcessStartToDispatcherReadyMs": 1003.3542,
+        "OpenRequestedProcessElapsedMs": 3008.7793,
+        "PlaybackReadyProcessElapsedMs": 3601.1584000000003,
+        "IdleSamplingDelayMs": 2000,
+        "PlaybackSamplingDelayMs": 3000,
+        "OpenToPlayingMs": 245.983,
+        "OpenToFirstPlaybackClockMs": 592.3791,
+        "OpenToVideoOutputMs": 233.0021,
+        "OpenToAudioOutputMs": 261.7665,
+        "Seek50PercentMs": 1100.4655000000002,
+        "Seek90PercentMs": 862.6930000000002,
+        "RateAccepted": true,
+        "RateChangeReflectMs": 0.9124,
+        "ObservedRate": 1.5,
+        "VolumeChangeReflectMs": 0.2047,
+        "ObservedVolumePercent": 50,
+        "WorkingSetBytes": 325517312,
+        "PeakWorkingSetBytes": 325550080
+      },
+      "processCpuPercentAverage": 1.349,
+      "processCpuPercentMaximum": 5.185,
+      "systemGpuPercentAverage": 0.0,
+      "systemGpuPercentMaximum": 0.0,
+      "systemGpuDecoderPercentAverage": 0.0,
+      "systemGpuDecoderPercentMaximum": 0.0,
+      "sampledWorkingSetBytesMaximum": 324157440,
+      "idleCpuPercentAverage": 0.251,
+      "idleGpuPercentAverage": 0.0,
+      "idleGpuDecoderPercentAverage": 0.0,
+      "idleWorkingSetMiBAverage": 159.632,
+      "playbackCpuPercentAverage": 0.86,
+      "playbackCpuPercentMaximum": 2.611,
+      "playbackGpuPercentAverage": 0.0,
+      "playbackGpuDecoderPercentAverage": 0.0,
+      "playbackWorkingSetMiBAverage": 257.345
+    },
+    {
+      "condition": "wmv-1080p60-60s",
+      "run": 2,
+      "processExitCode": 0,
+      "app": {
+        "Success": true,
+        "VideoPath": "Z:\\projects\\bakuretsu-osakana-kobo\\test-assets\\generated\\phase2-1920x1080-60s-60fps-wmv9-wma.wmv",
+        "Error": null,
+        "HardwareDecoder": "d3d11va",
+        "ProcessStartToWindowLoadedMs": 921.3415,
+        "ProcessStartToDispatcherReadyMs": 1036.0792,
+        "OpenRequestedProcessElapsedMs": 3040.8811,
+        "PlaybackReadyProcessElapsedMs": 3641.4847,
+        "IdleSamplingDelayMs": 2000,
+        "PlaybackSamplingDelayMs": 3000,
+        "OpenToPlayingMs": 253.8905,
+        "OpenToFirstPlaybackClockMs": 600.6036,
+        "OpenToVideoOutputMs": 241.3639,
+        "OpenToAudioOutputMs": 267.9581,
+        "Seek50PercentMs": 1069.2351000000003,
+        "Seek90PercentMs": 862.0864000000001,
+        "RateAccepted": true,
+        "RateChangeReflectMs": 0.9381,
+        "ObservedRate": 1.5,
+        "VolumeChangeReflectMs": 0.1652,
+        "ObservedVolumePercent": 50,
+        "WorkingSetBytes": 328880128,
+        "PeakWorkingSetBytes": 328908800
+      },
+      "processCpuPercentAverage": 1.474,
+      "processCpuPercentMaximum": 4.669,
+      "systemGpuPercentAverage": 0.0,
+      "systemGpuPercentMaximum": 0.0,
+      "systemGpuDecoderPercentAverage": 0.0,
+      "systemGpuDecoderPercentMaximum": 0.0,
+      "sampledWorkingSetBytesMaximum": 327983104,
+      "idleCpuPercentAverage": 0.131,
+      "idleGpuPercentAverage": 0.0,
+      "idleGpuDecoderPercentAverage": 0.0,
+      "idleWorkingSetMiBAverage": 161.052,
+      "playbackCpuPercentAverage": 1.211,
+      "playbackCpuPercentMaximum": 3.955,
+      "playbackGpuPercentAverage": 0.0,
+      "playbackGpuDecoderPercentAverage": 0.0,
+      "playbackWorkingSetMiBAverage": 264.775
+    },
+    {
+      "condition": "wmv-1080p60-60s",
+      "run": 3,
+      "processExitCode": 0,
+      "app": {
+        "Success": true,
+        "VideoPath": "Z:\\projects\\bakuretsu-osakana-kobo\\test-assets\\generated\\phase2-1920x1080-60s-60fps-wmv9-wma.wmv",
+        "Error": null,
+        "HardwareDecoder": "d3d11va",
+        "ProcessStartToWindowLoadedMs": 919.3557,
+        "ProcessStartToDispatcherReadyMs": 1038.9676,
+        "OpenRequestedProcessElapsedMs": 3045.4126,
+        "PlaybackReadyProcessElapsedMs": 3638.3957,
+        "IdleSamplingDelayMs": 2000,
+        "PlaybackSamplingDelayMs": 3000,
+        "OpenToPlayingMs": 247.693,
+        "OpenToFirstPlaybackClockMs": 592.9831,
+        "OpenToVideoOutputMs": 234.7594,
+        "OpenToAudioOutputMs": 262.5817,
+        "Seek50PercentMs": 1072.6958000000004,
+        "Seek90PercentMs": 901.9564,
+        "RateAccepted": true,
+        "RateChangeReflectMs": 0.8446,
+        "ObservedRate": 1.5,
+        "VolumeChangeReflectMs": 0.176,
+        "ObservedVolumePercent": 50,
+        "WorkingSetBytes": 330395648,
+        "PeakWorkingSetBytes": 330428416
+      },
+      "processCpuPercentAverage": 1.416,
+      "processCpuPercentMaximum": 4.935,
+      "systemGpuPercentAverage": 0.0,
+      "systemGpuPercentMaximum": 0.0,
+      "systemGpuDecoderPercentAverage": 0.0,
+      "systemGpuDecoderPercentMaximum": 0.0,
+      "sampledWorkingSetBytesMaximum": 329740288,
+      "idleCpuPercentAverage": 0.18,
+      "idleGpuPercentAverage": 0.0,
+      "idleGpuDecoderPercentAverage": 0.0,
+      "idleWorkingSetMiBAverage": 160.344,
+      "playbackCpuPercentAverage": 1.076,
+      "playbackCpuPercentMaximum": 2.096,
+      "playbackGpuPercentAverage": 0.0,
+      "playbackGpuDecoderPercentAverage": 0.0,
+      "playbackWorkingSetMiBAverage": 268.544
+    },
+    {
+      "condition": "wmv-1080p60-60s",
+      "run": 4,
+      "processExitCode": 0,
+      "app": {
+        "Success": true,
+        "VideoPath": "Z:\\projects\\bakuretsu-osakana-kobo\\test-assets\\generated\\phase2-1920x1080-60s-60fps-wmv9-wma.wmv",
+        "Error": null,
+        "HardwareDecoder": "d3d11va",
+        "ProcessStartToWindowLoadedMs": 885.223,
+        "ProcessStartToDispatcherReadyMs": 1005.7185,
+        "OpenRequestedProcessElapsedMs": 3009.8915,
+        "PlaybackReadyProcessElapsedMs": 3591.7435,
+        "IdleSamplingDelayMs": 2000,
+        "PlaybackSamplingDelayMs": 3000,
+        "OpenToPlayingMs": 234.52,
+        "OpenToFirstPlaybackClockMs": 581.852,
+        "OpenToVideoOutputMs": 222.6156,
+        "OpenToAudioOutputMs": 248.1144,
+        "Seek50PercentMs": 1114.0705999999996,
+        "Seek90PercentMs": 874.7311,
+        "RateAccepted": true,
+        "RateChangeReflectMs": 1.1095,
+        "ObservedRate": 1.5,
+        "VolumeChangeReflectMs": 0.1793,
+        "ObservedVolumePercent": 50,
+        "WorkingSetBytes": 330166272,
+        "PeakWorkingSetBytes": 330207232
+      },
+      "processCpuPercentAverage": 1.616,
+      "processCpuPercentMaximum": 5.599,
+      "systemGpuPercentAverage": 0.0,
+      "systemGpuPercentMaximum": 0.0,
+      "systemGpuDecoderPercentAverage": 0.0,
+      "systemGpuDecoderPercentMaximum": 0.0,
+      "sampledWorkingSetBytesMaximum": 329269248,
+      "idleCpuPercentAverage": 1.517,
+      "idleGpuPercentAverage": 0.0,
+      "idleGpuDecoderPercentAverage": 0.0,
+      "idleWorkingSetMiBAverage": 163.943,
+      "playbackCpuPercentAverage": 0.842,
+      "playbackCpuPercentMaximum": 1.832,
+      "playbackGpuPercentAverage": 0.0,
+      "playbackGpuDecoderPercentAverage": 0.0,
+      "playbackWorkingSetMiBAverage": 266.412
+    },
+    {
+      "condition": "wmv-1080p60-60s",
+      "run": 5,
+      "processExitCode": 0,
+      "app": {
+        "Success": true,
+        "VideoPath": "Z:\\projects\\bakuretsu-osakana-kobo\\test-assets\\generated\\phase2-1920x1080-60s-60fps-wmv9-wma.wmv",
+        "Error": null,
+        "HardwareDecoder": "d3d11va",
+        "ProcessStartToWindowLoadedMs": 893.5521,
+        "ProcessStartToDispatcherReadyMs": 1010.7714,
+        "OpenRequestedProcessElapsedMs": 3017.4848,
+        "PlaybackReadyProcessElapsedMs": 3614.1254,
+        "IdleSamplingDelayMs": 2000,
+        "PlaybackSamplingDelayMs": 3000,
+        "OpenToPlayingMs": 251.9014,
+        "OpenToFirstPlaybackClockMs": 596.6406,
+        "OpenToVideoOutputMs": 240.1844,
+        "OpenToAudioOutputMs": 265.4744,
+        "Seek50PercentMs": 1108.9546000000005,
+        "Seek90PercentMs": 876.3261000000002,
+        "RateAccepted": true,
+        "RateChangeReflectMs": 0.8654,
+        "ObservedRate": 1.5,
+        "VolumeChangeReflectMs": 0.1669,
+        "ObservedVolumePercent": 50,
+        "WorkingSetBytes": 332558336,
+        "PeakWorkingSetBytes": 332595200
+      },
+      "processCpuPercentAverage": 1.744,
+      "processCpuPercentMaximum": 5.595,
+      "systemGpuPercentAverage": 0.0,
+      "systemGpuPercentMaximum": 0.0,
+      "systemGpuDecoderPercentAverage": 0.0,
+      "systemGpuDecoderPercentMaximum": 0.0,
+      "sampledWorkingSetBytesMaximum": 331239424,
+      "idleCpuPercentAverage": 1.444,
+      "idleGpuPercentAverage": 0.0,
+      "idleGpuDecoderPercentAverage": 0.0,
+      "idleWorkingSetMiBAverage": 167.439,
+      "playbackCpuPercentAverage": 1.047,
+      "playbackCpuPercentMaximum": 2.607,
+      "playbackGpuPercentAverage": 0.0,
+      "playbackGpuDecoderPercentAverage": 0.0,
+      "playbackWorkingSetMiBAverage": 266.076
+    }
+  ],
+  "summary": [
+    {
+      "condition": "mp4-1080p60-60s",
+      "successfulRuns": 5,
+      "totalRuns": 5,
+      "processStartToWindowLoadedMs": {
+        "median": 955.928,
+        "maximum": 1029.223
+      },
+      "processStartToDispatcherReadyMs": {
+        "median": 1084.802,
+        "maximum": 1173.054
+      },
+      "openToVideoReadyMs": {
+        "median": 684.201,
+        "maximum": 707.749
+      },
+      "openToAudioOutputMs": {
+        "median": 27.289,
+        "maximum": 28.419
+      },
+      "seek50PercentMs": {
+        "median": 447.319,
+        "maximum": 462.626
+      },
+      "seek90PercentMs": {
+        "median": 751.31,
+        "maximum": 766.542
+      },
+      "rateChangeReflectMs": {
+        "median": 1.149,
+        "maximum": 1.316
+      },
+      "volumeChangeReflectMs": {
+        "median": 0.186,
+        "maximum": 0.191
+      },
+      "processCpuPercentAverage": {
+        "median": 1.431,
+        "maximum": 1.496
+      },
+      "processCpuPercentMaximum": {
+        "median": 5.101,
+        "maximum": 5.163
+      },
+      "systemGpuPercentAverage": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "systemGpuPercentMaximum": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "systemGpuDecoderPercentAverage": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "systemGpuDecoderPercentMaximum": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "sampledWorkingSetMiBMaximum": {
+        "median": 327.035,
+        "maximum": 331.379
+      },
+      "idleCpuPercentAverage": {
+        "median": 0.236,
+        "maximum": 0.408
+      },
+      "idleGpuPercentAverage": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "idleGpuDecoderPercentAverage": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "idleWorkingSetMiBAverage": {
+        "median": 160.843,
+        "maximum": 164.481
+      },
+      "playbackCpuPercentAverage": {
+        "median": 1.059,
+        "maximum": 1.127
+      },
+      "playbackCpuPercentMaximum": {
+        "median": 2.334,
+        "maximum": 2.821
+      },
+      "playbackGpuPercentAverage": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "playbackGpuDecoderPercentAverage": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "playbackWorkingSetMiBAverage": {
+        "median": 283.483,
+        "maximum": 288.648
+      }
+    },
+    {
+      "condition": "mp4-4k60-60s",
+      "successfulRuns": 5,
+      "totalRuns": 5,
+      "processStartToWindowLoadedMs": {
+        "median": 922.135,
+        "maximum": 1049.969
+      },
+      "processStartToDispatcherReadyMs": {
+        "median": 1044.014,
+        "maximum": 1196.125
+      },
+      "openToVideoReadyMs": {
+        "median": 705.432,
+        "maximum": 718.962
+      },
+      "openToAudioOutputMs": {
+        "median": 25.394,
+        "maximum": 27.386
+      },
+      "seek50PercentMs": {
+        "median": 452.177,
+        "maximum": 457.473
+      },
+      "seek90PercentMs": {
+        "median": 1040.101,
+        "maximum": 1068.302
+      },
+      "rateChangeReflectMs": {
+        "median": 0.943,
+        "maximum": 1.026
+      },
+      "volumeChangeReflectMs": {
+        "median": 0.174,
+        "maximum": 0.232
+      },
+      "processCpuPercentAverage": {
+        "median": 1.783,
+        "maximum": 1.826
+      },
+      "processCpuPercentMaximum": {
+        "median": 5.493,
+        "maximum": 7.36
+      },
+      "systemGpuPercentAverage": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "systemGpuPercentMaximum": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "systemGpuDecoderPercentAverage": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "systemGpuDecoderPercentMaximum": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "sampledWorkingSetMiBMaximum": {
+        "median": 525.297,
+        "maximum": 563.961
+      },
+      "idleCpuPercentAverage": {
+        "median": 1.069,
+        "maximum": 1.36
+      },
+      "idleGpuPercentAverage": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "idleGpuDecoderPercentAverage": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "idleWorkingSetMiBAverage": {
+        "median": 165.133,
+        "maximum": 167.655
+      },
+      "playbackCpuPercentAverage": {
+        "median": 0.908,
+        "maximum": 1.08
+      },
+      "playbackCpuPercentMaximum": {
+        "median": 2.088,
+        "maximum": 2.978
+      },
+      "playbackGpuPercentAverage": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "playbackGpuDecoderPercentAverage": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "playbackWorkingSetMiBAverage": {
+        "median": 492.206,
+        "maximum": 495.22
+      }
+    },
+    {
+      "condition": "wmv-1080p60-60s",
+      "successfulRuns": 5,
+      "totalRuns": 5,
+      "processStartToWindowLoadedMs": {
+        "median": 904.222,
+        "maximum": 921.342
+      },
+      "processStartToDispatcherReadyMs": {
+        "median": 1010.771,
+        "maximum": 1038.968
+      },
+      "openToVideoReadyMs": {
+        "median": 592.983,
+        "maximum": 600.604
+      },
+      "openToAudioOutputMs": {
+        "median": 262.582,
+        "maximum": 267.958
+      },
+      "seek50PercentMs": {
+        "median": 1100.466,
+        "maximum": 1114.071
+      },
+      "seek90PercentMs": {
+        "median": 874.731,
+        "maximum": 901.956
+      },
+      "rateChangeReflectMs": {
+        "median": 0.912,
+        "maximum": 1.11
+      },
+      "volumeChangeReflectMs": {
+        "median": 0.176,
+        "maximum": 0.205
+      },
+      "processCpuPercentAverage": {
+        "median": 1.474,
+        "maximum": 1.744
+      },
+      "processCpuPercentMaximum": {
+        "median": 5.185,
+        "maximum": 5.599
+      },
+      "systemGpuPercentAverage": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "systemGpuPercentMaximum": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "systemGpuDecoderPercentAverage": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "systemGpuDecoderPercentMaximum": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "sampledWorkingSetMiBMaximum": {
+        "median": 314.016,
+        "maximum": 315.895
+      },
+      "idleCpuPercentAverage": {
+        "median": 0.251,
+        "maximum": 1.517
+      },
+      "idleGpuPercentAverage": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "idleGpuDecoderPercentAverage": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "idleWorkingSetMiBAverage": {
+        "median": 161.052,
+        "maximum": 167.439
+      },
+      "playbackCpuPercentAverage": {
+        "median": 1.047,
+        "maximum": 1.211
+      },
+      "playbackCpuPercentMaximum": {
+        "median": 2.607,
+        "maximum": 3.955
+      },
+      "playbackGpuPercentAverage": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "playbackGpuDecoderPercentAverage": {
+        "median": 0.0,
+        "maximum": 0.0
+      },
+      "playbackWorkingSetMiBAverage": {
+        "median": 266.076,
+        "maximum": 268.544
+      }
+    }
+  ]
+}

@@ -22,6 +22,9 @@
         PreviewKeyDown="Window_OnPreviewKeyDown"
         PreviewMouseMove="Window_OnPreviewMouseMove"
         Deactivated="Window_OnDeactivated"
+        Loaded="Window_OnLoaded"
+        SizeChanged="Window_OnSizeChanged"
+        DpiChanged="Window_OnDpiChanged"
         AutomationProperties.Name="爆裂おさかな工房 Phase 3 UIモック">
     <Grid>
         <Grid.RowDefinitions>
@@ -45,9 +48,10 @@
                 <MenuItem x:Name="PlaylistMenuItem"
                           Header="プレイリスト(_P)"
                           IsCheckable="True"
-                          Click="PlaylistMenuItem_OnClick" />
+                          Checked="PlaylistMenuItem_OnCheckedChanged"
+                          Unchecked="PlaylistMenuItem_OnCheckedChanged" />
                 <Separator />
-                <MenuItem x:Name="ReviewPanelMenuItem" Header="レビュー操作パネル" IsCheckable="True" IsChecked="True" Click="ReviewPanelMenuItem_OnClick" />
+                <MenuItem x:Name="ReviewPanelMenuItem" Header="レビュー操作パネル" IsCheckable="True" IsChecked="True" />
                 <Separator />
                 <MenuItem Header="サムネイル設定(_T)…" Click="ThumbnailSettingsMenuItem_OnClick" />
             </MenuItem>
@@ -249,6 +253,7 @@
                         <TextBlock x:Name="NotificationToastText"
                                    Grid.Column="1"
                                    TextWrapping="Wrap"
+                                   AutomationProperties.LiveSetting="Polite"
                                    Text="動画を開けませんでした。別のファイルを選択してください。" />
                         <Button Grid.Column="2"
                                 Margin="8,-5,-6,-5"
@@ -355,7 +360,8 @@
                            VerticalAlignment="Center"
                            FontFamily="Cascadia Mono, Consolas"
                            FontSize="13"
-                           Text="--:--:-- / --:--:--" />
+                           Text="--:--:-- / --:--:--"
+                           AutomationProperties.Name="再生時刻" />
                 <Button x:Name="MuteButton"
                         Grid.Column="3"
                         Width="38"
@@ -482,7 +488,11 @@
                   BorderThickness="1"
                   Foreground="{StaticResource TextBrush}"
                   IsExpanded="True"
+                  Visibility="{Binding IsChecked, ElementName=ReviewPanelMenuItem, Converter={StaticResource BooleanToVisibilityConverter}}"
                   Header="レビュー操作">
+            <ScrollViewer MaxHeight="{Binding ActualHeight, ElementName=VideoSurface}"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
             <StackPanel Margin="14,10,14,14">
                 <TextBlock Foreground="{StaticResource MutedTextBrush}"
                            FontSize="11"
@@ -539,7 +549,31 @@
                            Foreground="{StaticResource MutedTextBrush}"
                            TextWrapping="Wrap"
                            Text="Space: 再生/一時停止  ←→: 5秒  ↑↓: 速度  Alt+Enter: 全画面  Esc: 解除" />
+                <Separator Margin="0,14,0,10" Background="#52647A" />
+                <TextBlock FontSize="11"
+                           Foreground="{StaticResource MutedTextBrush}"
+                           Text="表示・DPI確認" />
+                <UniformGrid Margin="0,6,0,0" Columns="2">
+                    <Button Margin="0,0,5,0"
+                            Padding="8,6"
+                            Tag="1000,650"
+                            Click="ReviewWindowSizeButton_OnClick"
+                            Content="初期サイズ" />
+                    <Button Margin="5,0,0,0"
+                            Padding="8,6"
+                            Tag="720,480"
+                            Click="ReviewWindowSizeButton_OnClick"
+                            Content="最小サイズ" />
+                </UniformGrid>
+                <TextBlock x:Name="ReviewDisplayMetricsText"
+                           Margin="0,7,0,0"
+                           FontFamily="Cascadia Mono, Consolas"
+                           FontSize="10"
+                           Foreground="{StaticResource MutedTextBrush}"
+                           TextWrapping="Wrap"
+                           Text="1000×650 / 100% (96 DPI)" />
             </StackPanel>
+            </ScrollViewer>
         </Expander>
     </Grid>
 </Window>

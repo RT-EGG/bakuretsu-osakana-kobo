@@ -67,7 +67,9 @@
                 CornerRadius="5"
                 Visibility="Collapsed"
                 AutomationProperties.LiveSetting="Polite">
-            <TextBlock x:Name="NotificationText" TextWrapping="Wrap" />
+            <TextBlock x:Name="NotificationText"
+                       TextWrapping="Wrap"
+                       AutomationProperties.LiveSetting="Polite" />
         </Border>
 
         <Grid Grid.Row="2" Margin="12,0,12,8">
@@ -83,7 +85,9 @@
                      PreviewMouseLeftButtonDown="PlaylistList_OnPreviewMouseLeftButtonDown"
                      MouseMove="PlaylistList_OnMouseMove"
                      DragOver="PlaylistList_OnDragOver"
-                     Drop="PlaylistList_OnDrop">
+                     Drop="PlaylistList_OnDrop"
+                     AutomationProperties.Name="プレイリスト項目"
+                     AutomationProperties.HelpText="上下キーで項目を移動し、ControlキーまたはShiftキーを使って複数選択できます。">
                 <ListBox.ItemContainerStyle>
                     <Style TargetType="ListBoxItem">
                         <Setter Property="Padding" Value="0" />

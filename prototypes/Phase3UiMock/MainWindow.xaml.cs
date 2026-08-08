@@ -702,6 +702,44 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ReviewWindowSizeButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string sizeText })
+        {
+            return;
+        }
+
+        var dimensions = sizeText.Split(',');
+        if (dimensions.Length != 2
+            || !double.TryParse(dimensions[0], out var width)
+            || !double.TryParse(dimensions[1], out var height))
+        {
+            return;
+        }
+
+        WindowState = WindowState.Normal;
+        Width = Math.Max(MinWidth, width);
+        Height = Math.Max(MinHeight, height);
+    }
+
+    private void Window_OnLoaded(object sender, RoutedEventArgs e) => UpdateReviewDisplayMetrics();
+
+    private void Window_OnSizeChanged(object sender, SizeChangedEventArgs e) => UpdateReviewDisplayMetrics();
+
+    private void Window_OnDpiChanged(object sender, DpiChangedEventArgs e) => UpdateReviewDisplayMetrics();
+
+    private void UpdateReviewDisplayMetrics()
+    {
+        if (ReviewDisplayMetricsText is null)
+        {
+            return;
+        }
+
+        var dpi = VisualTreeHelper.GetDpi(this);
+        ReviewDisplayMetricsText.Text =
+            $"{ActualWidth:0}×{ActualHeight:0} / {dpi.DpiScaleX * 100:0}% ({dpi.PixelsPerInchX:0} DPI)\n固定ダークテーマ";
+    }
+
     private void RunFailureScenarioButton_OnClick(object sender, RoutedEventArgs e)
     {
         if (ReviewFailureScenarioComboBox.SelectedItem is not ComboBoxItem { Tag: string scenarioName }
@@ -748,17 +786,9 @@ public partial class MainWindow : Window
         ShowNotification(feedback.Message, feedback.Severity);
     }
 
-    private void ReviewPanelMenuItem_OnClick(object sender, RoutedEventArgs e)
+    private void PlaylistMenuItem_OnCheckedChanged(object sender, RoutedEventArgs e)
     {
-        if (sender is MenuItem menuItem)
-        {
-            ReviewPanel.Visibility = menuItem.IsChecked ? Visibility.Visible : Visibility.Collapsed;
-        }
-    }
-
-    private void PlaylistMenuItem_OnClick(object sender, RoutedEventArgs e)
-    {
-        if (PlaylistMenuItem.IsChecked)
+        if (sender is MenuItem { IsChecked: true })
         {
             ShowPlaylistWindow();
             return;

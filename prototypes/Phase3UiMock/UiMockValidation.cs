@@ -120,6 +120,13 @@ internal static class UiMockValidation
         Require(failureDefinitions.Single(definition => definition.Outcome == FailureOutcome.PlaybackError).Severity == NotificationSeverity.Error, "A mid-playback failure must use error feedback.");
         checks.Add("failure-feedback-catalog");
 
+        Require(UiAccessibilityValidation.ContrastRatio("#F2F6FC", "#0C1119") >= 4.5, "Primary text must meet the normal-text contrast target.");
+        Require(UiAccessibilityValidation.ContrastRatio("#9DABC0", "#0C1119") >= 4.5, "Muted text must meet the normal-text contrast target.");
+        Require(UiAccessibilityValidation.ContrastRatio("#07111A", "#47B8FF") >= 4.5, "Primary-button text must meet the normal-text contrast target.");
+        Require(UiAccessibilityValidation.ContrastRatio("#FF6B79", "#3A1C28") >= 4.5, "Error indicators must meet the normal-text contrast target.");
+        Require(UiAccessibilityValidation.ContrastRatio("#17202C", "#EEF2F7") >= 4.5, "Menu text must meet the normal-text contrast target.");
+        checks.Add("theme-contrast");
+
         var window = new MainWindow
         {
             ShowInTaskbar = false,
@@ -167,6 +174,28 @@ internal static class UiMockValidation
         window.RunReviewFailureScenario(ReviewFailureScenario.MissingFileWithoutMedia);
         Require(reviewStateText?.Text == "MEDIA-EMPTY", "A missing file without current media must return to the empty state.");
         checks.Add("failure-feedback-window-states");
+
+        Require(window.Width == 1000 && window.Height == 650, "The main window must retain its approved initial size.");
+        Require(window.MinWidth == 720 && window.MinHeight == 480, "The main window must retain its approved minimum size.");
+        var timeText = (FrameworkElement?)window.FindName("TimeText");
+        var notificationText = (FrameworkElement?)window.FindName("NotificationToastText");
+        Require(System.Windows.Automation.AutomationProperties.GetName(timeText) == "再生時刻", "Playback time must expose an accessible name.");
+        Require(
+            System.Windows.Automation.AutomationProperties.GetLiveSetting(notificationText)
+                == System.Windows.Automation.AutomationLiveSetting.Polite,
+            "Non-modal feedback must expose a polite live region.");
+        var reviewPanelMenu = (MenuItem?)window.FindName("ReviewPanelMenuItem");
+        var reviewPanel = (FrameworkElement?)window.FindName("ReviewPanel");
+        if (reviewPanelMenu is null || reviewPanel is null)
+        {
+            throw new InvalidOperationException("Review-panel controls must be present.");
+        }
+
+        reviewPanelMenu.IsChecked = false;
+        Require(reviewPanel.Visibility == Visibility.Collapsed, "Automation-driven review-panel toggles must update visibility.");
+        reviewPanelMenu.IsChecked = true;
+        Require(reviewPanel.Visibility == Visibility.Visible, "The review panel must return when its toggle is checked.");
+        checks.Add("main-window-size-and-automation");
         window.Close();
         var settingsWindow = new ThumbnailSettingsWindow(1.25)
         {
@@ -205,6 +234,10 @@ internal static class UiMockValidation
         {
             ShowInTaskbar = false,
         };
+        Require(playlistWindow.Width == 680 && playlistWindow.Height == 540, "The playlist window must retain its approved initial size.");
+        Require(playlistWindow.MinWidth == 560 && playlistWindow.MinHeight == 400, "The playlist window must retain its approved minimum size.");
+        var playlistList = (FrameworkElement?)playlistWindow.FindName("PlaylistList");
+        Require(System.Windows.Automation.AutomationProperties.GetName(playlistList) == "プレイリスト項目", "The playlist must expose an accessible name.");
         playlistWindow.Close();
         checks.Add("playlist-window-construction");
         checks.Add("window-construction");

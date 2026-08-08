@@ -13,7 +13,21 @@
         SnapsToDevicePixels="True"
         AutomationProperties.Name="爆裂おさかな工房">
     <Grid>
-        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Menu Grid.Row="0">
+            <MenuItem Header="ファイル(_F)">
+                <MenuItem Header="データフォルダーを開く(_D)" Click="OpenDataFolderMenuItem_OnClick" />
+                <Separator />
+                <MenuItem Header="終了(_X)" Click="ExitMenuItem_OnClick" />
+            </MenuItem>
+        </Menu>
+
+        <StackPanel Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center">
             <TextBlock HorizontalAlignment="Center"
                        FontSize="20"
                        FontWeight="SemiBold"
@@ -23,5 +37,39 @@
                        Foreground="{StaticResource MutedTextBrush}"
                        Text="Phase 4 アプリ基盤を構築中です" />
         </StackPanel>
+
+        <Border x:Name="NotificationBorder"
+                Grid.Row="2"
+                Margin="12"
+                Padding="12"
+                Background="#2B2026"
+                BorderBrush="#FF6B79"
+                BorderThickness="1"
+                CornerRadius="6"
+                Visibility="Collapsed"
+                AutomationProperties.LiveSetting="Assertive">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock x:Name="NotificationMessageText"
+                               FontWeight="SemiBold"
+                               TextWrapping="Wrap" />
+                    <TextBlock x:Name="NotificationActionText"
+                               Margin="0,4,0,0"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               TextWrapping="Wrap" />
+                </StackPanel>
+                <Button Grid.Column="1"
+                        Margin="12,0,0,0"
+                        Padding="8,4"
+                        VerticalAlignment="Top"
+                        AutomationProperties.Name="通知を閉じる"
+                        Click="DismissNotificationButton_OnClick"
+                        Content="閉じる" />
+            </Grid>
+        </Border>
     </Grid>
 </Window>

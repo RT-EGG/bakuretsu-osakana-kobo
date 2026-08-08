@@ -54,6 +54,7 @@ public partial class MainWindow : Window
     private double _thumbnailIntervalPercent = 1.0;
     private double _activeThumbnailIntervalPercent = 1.0;
     private string _currentFilePath = DefaultMockFilePath;
+    private PlaylistWindow? _playlistWindow;
 
     public MainWindow()
     {
@@ -125,8 +126,13 @@ public partial class MainWindow : Window
         }
     }
 
-    private void BeginMockOpen(string path)
+    private void BeginMockOpen(string path, bool fromPlaylist = false)
     {
+        if (!fromPlaylist)
+        {
+            _playlistWindow?.CancelContinuousPlayback();
+        }
+
         CloseSeekThumbnail();
         _backgroundThumbnailTimer.Stop();
         _generatedThumbnailSlots.Clear();
@@ -149,7 +155,18 @@ public partial class MainWindow : Window
         StartBackgroundThumbnailGeneration();
     }
 
-    private void PlaybackTimer_OnTick(object? sender, EventArgs e) => _session.Advance(_playbackTimer.Interval);
+    private void PlaybackTimer_OnTick(object? sender, EventArgs e)
+    {
+        var wasPlaying = _session.State == MediaUiState.Playing;
+        _session.Advance(_playbackTimer.Interval);
+        if (wasPlaying
+            && _session.State == MediaUiState.Paused
+            && _session.HasKnownDuration
+            && _session.Position == _session.Duration)
+        {
+            _playlistWindow?.ContinueAfterNaturalEnd();
+        }
+    }
 
     private void PlayPauseButton_OnClick(object sender, RoutedEventArgs e) => _session.TogglePlayPause();
 
@@ -693,6 +710,51 @@ public partial class MainWindow : Window
         }
     }
 
+    private void PlaylistMenuItem_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (PlaylistMenuItem.IsChecked)
+        {
+            ShowPlaylistWindow();
+            return;
+        }
+
+        _playlistWindow?.Close();
+    }
+
+    private void ShowPlaylistWindow()
+    {
+        if (_playlistWindow is not null)
+        {
+            _playlistWindow.Activate();
+            return;
+        }
+
+        var playlistWindow = new PlaylistWindow
+        {
+            Owner = this,
+        };
+        playlistWindow.PlayRequested += PlaylistWindow_OnPlayRequested;
+        playlistWindow.Closed += PlaylistWindow_OnClosed;
+        playlistWindow.UpdateCurrentMedia(_session.CanControlPlayback ? _currentFilePath : null);
+        _playlistWindow = playlistWindow;
+        playlistWindow.Show();
+    }
+
+    private void PlaylistWindow_OnPlayRequested(object? sender, PlaylistPlayRequestedEventArgs e) =>
+        BeginMockOpen(e.Entry.Path, fromPlaylist: true);
+
+    private void PlaylistWindow_OnClosed(object? sender, EventArgs e)
+    {
+        if (_playlistWindow is not null)
+        {
+            _playlistWindow.PlayRequested -= PlaylistWindow_OnPlayRequested;
+            _playlistWindow.Closed -= PlaylistWindow_OnClosed;
+            _playlistWindow = null;
+        }
+
+        PlaylistMenuItem.IsChecked = false;
+    }
+
     private void RecentFilesMenuItem_OnClick(object sender, RoutedEventArgs e)
     {
         if (e.OriginalSource is not MenuItem menuItem)
@@ -866,6 +928,8 @@ public partial class MainWindow : Window
     {
         var state = _session.State;
 
+        _playlistWindow?.UpdateCurrentMedia(_session.CanControlPlayback ? _currentFilePath : null);
+
         EmptyStatePanel.Visibility = state == MediaUiState.Empty ? Visibility.Visible : Visibility.Collapsed;
         LoadingStatePanel.Visibility = state == MediaUiState.Loading ? Visibility.Visible : Visibility.Collapsed;
         ErrorStatePanel.Visibility = state == MediaUiState.Error ? Visibility.Visible : Visibility.Collapsed;
@@ -965,6 +1029,14 @@ public partial class MainWindow : Window
 
     private void MainWindow_OnClosed(object? sender, EventArgs e)
     {
+        if (_playlistWindow is not null)
+        {
+            _playlistWindow.PlayRequested -= PlaylistWindow_OnPlayRequested;
+            _playlistWindow.Closed -= PlaylistWindow_OnClosed;
+            _playlistWindow.Close();
+            _playlistWindow = null;
+        }
+
         _loadingTimer.Stop();
         _playbackTimer.Stop();
         _longPressTimer.Stop();

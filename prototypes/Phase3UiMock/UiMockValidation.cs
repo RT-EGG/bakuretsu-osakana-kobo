@@ -145,6 +145,38 @@ internal static class UiMockValidation
         Require(settingsWindow.SelectedIntervalPercent == 1.25, "Thumbnail settings must preserve a quarter-percent value.");
         settingsWindow.Close();
         checks.Add("thumbnail-settings-window");
+
+        var playlist = new PlaylistMockModel();
+        const string firstPath = @"C:\Videos\first.mp4";
+        const string missingPath = @"C:\Videos\missing.mp4";
+        const string errorPath = @"C:\Videos\error.wmv";
+        const string lastPath = @"C:\Videos\last.wmv";
+        playlist.Add(firstPath);
+        playlist.Add(missingPath, isMissing: true);
+        playlist.Add(errorPath, hasLoadError: true);
+        playlist.Add(lastPath);
+        playlist.Add(firstPath);
+        Require(playlist.Entries.Count == 5, "A playlist must retain duplicate registrations.");
+        Require(playlist.StartFromFirst()?.Path == firstPath, "Playlist playback must start from the first playable entry.");
+        Require(playlist.Advance()?.Path == lastPath, "Continuous playback must skip missing and load-error entries.");
+        var duplicate = playlist.Entries[^1];
+        Require(playlist.StartFrom(duplicate) == duplicate, "Starting from a selected playable entry must preserve that registration.");
+        playlist.Loop = true;
+        Require(playlist.Advance() == playlist.Entries[0], "Loop playback must return to the first playable entry.");
+        playlist.MoveToInsertionIndex(duplicate, 0);
+        Require(playlist.Entries[0] == duplicate && playlist.Entries[0].Order == 1, "Drag reorder must update both collection order and displayed order.");
+        playlist.Remove([duplicate]);
+        Require(playlist.Entries.Count == 4 && playlist.Entries.Count(entry => entry.Path == firstPath) == 1, "Removing an entry must remove only the selected registration.");
+        playlist.CancelContinuousPlayback();
+        Require(playlist.CurrentEntry is null, "Direct main-window opens must cancel continuous playback.");
+        checks.Add("playlist-sequencing-and-editing");
+
+        var playlistWindow = new PlaylistWindow
+        {
+            ShowInTaskbar = false,
+        };
+        playlistWindow.Close();
+        checks.Add("playlist-window-construction");
         checks.Add("window-construction");
 
         Require(FileOpenRequestClassifier.Classify([]).Kind == FileOpenRequestKind.None, "Empty drop must be ignored.");

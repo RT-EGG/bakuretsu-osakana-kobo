@@ -42,6 +42,11 @@
                 <MenuItem Header="終了(_X)" Click="ExitMenuItem_OnClick" />
             </MenuItem>
             <MenuItem Header="表示(_V)">
+                <MenuItem x:Name="PlaylistMenuItem"
+                          Header="プレイリスト(_P)"
+                          IsCheckable="True"
+                          Click="PlaylistMenuItem_OnClick" />
+                <Separator />
                 <MenuItem x:Name="ReviewPanelMenuItem" Header="レビュー操作パネル" IsCheckable="True" IsChecked="True" Click="ReviewPanelMenuItem_OnClick" />
                 <Separator />
                 <MenuItem Header="サムネイル設定(_T)…" Click="ThumbnailSettingsMenuItem_OnClick" />

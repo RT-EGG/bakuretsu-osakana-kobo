@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/BakuretsuOsakanaKobo.App/BakuretsuOsakanaKobo.App.csproj" />
+  <Project Path="tests/BakuretsuOsakanaKobo.App.Tests/BakuretsuOsakanaKobo.App.Tests.csproj" />
+</Solution>

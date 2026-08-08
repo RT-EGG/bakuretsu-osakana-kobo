@@ -80,6 +80,25 @@ internal static class UiMockValidation
         Require(MainWindow.FullscreenControlsAutoHideMilliseconds == 3000, "Fullscreen controls must hide after three seconds.");
         checks.Add("gesture-and-fullscreen-settings");
 
+        session.CompleteLoading(TimeSpan.FromSeconds(30));
+        Require(session.Position == TimeSpan.FromSeconds(30), "A valid registered start position must be applied.");
+        session.CompleteLoading(TimeSpan.FromHours(2));
+        Require(session.Position == TimeSpan.Zero, "An out-of-range registered start position must fall back to zero.");
+        checks.Add("registered-start-position");
+
+        Require(SeekUiGeometry.PositionFromPointer(50, 100, 200) == 100, "Pointer position must map to media time.");
+        Require(SeekUiGeometry.PositionFromPointer(-10, 100, 200) == 0, "Pointer position must clamp at the start.");
+        Require(SeekUiGeometry.PopupOffset(0, 500, 240) == 0, "Thumbnail popup must clamp at the left edge.");
+        Require(SeekUiGeometry.PopupOffset(500, 500, 240) == 260, "Thumbnail popup must clamp at the right edge.");
+        Require(SeekUiGeometry.MarkerOffset(50, 100, 400, 8) == 196, "Start marker must center on the registered time.");
+        Require(SeekUiGeometry.ThumbnailSlot(50, 100, 1.0) == 50, "Hover time must map to the configured thumbnail slot.");
+        Require(SeekUiGeometry.ThumbnailSlot(1.24, 100, 0.25) * 0.25 == 1.25, "Quarter-percent previews must map to their actual generated slot.");
+        Require(SeekUiGeometry.ThumbnailSlotCount(1.0) == 101, "A 1% interval must include both ends of the media.");
+        Require(SeekUiGeometry.ThumbnailSlotCount(0.25) == 401, "A quarter-percent interval must include both ends of the media.");
+        Require(MainWindow.ThumbnailPreviewDelayMilliseconds == 180, "Thumbnail waiting state must use the review delay.");
+        Require(MainWindow.BackgroundThumbnailStepMilliseconds == 30, "The mock must populate its thumbnail cache in the background.");
+        checks.Add("seek-thumbnail-geometry");
+
         session.ShowError();
         Require(session.State == MediaUiState.Error && !session.CanControlPlayback, "Error state must disable controls.");
         checks.Add("error-state");
@@ -119,6 +138,13 @@ internal static class UiMockValidation
             "Bulk removal must preserve existing history entries and the clear-history command.");
         checks.Add("recent-missing-bulk-delete-menu");
         window.Close();
+        var settingsWindow = new ThumbnailSettingsWindow(1.25)
+        {
+            ShowInTaskbar = false,
+        };
+        Require(settingsWindow.SelectedIntervalPercent == 1.25, "Thumbnail settings must preserve a quarter-percent value.");
+        settingsWindow.Close();
+        checks.Add("thumbnail-settings-window");
         checks.Add("window-construction");
 
         Require(FileOpenRequestClassifier.Classify([]).Kind == FileOpenRequestKind.None, "Empty drop must be ignored.");

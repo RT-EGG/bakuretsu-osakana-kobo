@@ -43,6 +43,8 @@
             </MenuItem>
             <MenuItem Header="表示(_V)">
                 <MenuItem x:Name="ReviewPanelMenuItem" Header="レビュー操作パネル" IsCheckable="True" IsChecked="True" Click="ReviewPanelMenuItem_OnClick" />
+                <Separator />
+                <MenuItem Header="サムネイル設定(_T)…" Click="ThumbnailSettingsMenuItem_OnClick" />
             </MenuItem>
         </Menu>
 
@@ -67,6 +69,8 @@
                         <MenuItem Header="1.5×" Tag="1.5" IsCheckable="True" Click="VideoContextMenuItem_OnClick" />
                         <MenuItem Header="2.0×" Tag="2.0" IsCheckable="True" Click="VideoContextMenuItem_OnClick" />
                     </MenuItem>
+                    <Separator />
+                    <MenuItem Header="現在位置を再生開始位置に設定" Tag="set-start-position" Click="VideoContextMenuItem_OnClick" />
                     <Separator />
                     <MenuItem Header="フルスクリーン" Tag="fullscreen" IsCheckable="True" Click="VideoContextMenuItem_OnClick" />
                 </ContextMenu>
@@ -262,18 +266,40 @@
                         Click="PlayPauseButton_OnClick"
                         Content="▶"
                         AutomationProperties.Name="再生" />
-                <Slider x:Name="SeekSlider"
-                        Grid.Column="1"
-                        Height="22"
-                        Margin="12,0,14,0"
-                        VerticalAlignment="Center"
-                        Minimum="0"
-                        Maximum="1"
-                        IsEnabled="False"
-                        IsMoveToPointEnabled="True"
-                        PreviewMouseLeftButtonDown="SeekSlider_OnPreviewMouseLeftButtonDown"
-                        PreviewMouseLeftButtonUp="SeekSlider_OnPreviewMouseLeftButtonUp"
-                        AutomationProperties.Name="再生位置" />
+                <Grid x:Name="SeekArea"
+                      Grid.Column="1"
+                      Height="22"
+                      Margin="12,0,14,0"
+                      VerticalAlignment="Center">
+                    <Slider x:Name="SeekSlider"
+                            Height="22"
+                            Minimum="0"
+                            Maximum="1"
+                            IsEnabled="False"
+                            IsMoveToPointEnabled="True"
+                            PreviewMouseLeftButtonDown="SeekSlider_OnPreviewMouseLeftButtonDown"
+                            PreviewMouseLeftButtonUp="SeekSlider_OnPreviewMouseLeftButtonUp"
+                            MouseEnter="SeekSlider_OnMouseEnter"
+                            MouseMove="SeekSlider_OnMouseMove"
+                            MouseLeave="SeekSlider_OnMouseLeave"
+                            SizeChanged="SeekSlider_OnSizeChanged"
+                            AutomationProperties.Name="再生位置" />
+                    <Canvas IsHitTestVisible="False">
+                        <Grid x:Name="StartPositionMarker"
+                              Width="8"
+                              Height="20"
+                              Visibility="Collapsed"
+                              AutomationProperties.Name="登録済み再生開始位置">
+                            <Polygon Points="0,0 8,0 4,6" Fill="#FFC857" />
+                            <Border Width="2"
+                                    Height="13"
+                                    Margin="0,5,0,0"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Top"
+                                    Background="#FFC857" />
+                        </Grid>
+                    </Canvas>
+                </Grid>
                 <TextBlock x:Name="TimeText"
                            Grid.Column="2"
                            MinWidth="164"
@@ -335,6 +361,62 @@
                 </Border>
             </Grid>
         </Border>
+
+        <Popup x:Name="SeekThumbnailPopup"
+               PlacementTarget="{Binding ElementName=SeekSlider}"
+               Placement="Relative"
+               AllowsTransparency="True"
+               PopupAnimation="Fade"
+               StaysOpen="True"
+               IsHitTestVisible="False"
+               Focusable="False">
+            <Border Width="240"
+                    Padding="5"
+                    Background="#F20B1119"
+                    BorderBrush="#6A7F99"
+                    BorderThickness="1"
+                    CornerRadius="6">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="135" />
+                        <RowDefinition Height="28" />
+                    </Grid.RowDefinitions>
+                    <Border x:Name="ThumbnailPreviewArtwork" ClipToBounds="True" CornerRadius="3">
+                        <Border.Background>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                <GradientStop Color="#183A56" Offset="0" />
+                                <GradientStop Color="#0E6B83" Offset="0.5" />
+                                <GradientStop Color="#101D2A" Offset="1" />
+                            </LinearGradientBrush>
+                        </Border.Background>
+                        <Grid>
+                            <Ellipse Width="94" Height="94" Fill="#264D68" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <TextBlock x:Name="ThumbnailFrameText"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       FontSize="34"
+                                       Foreground="#9DE3FF"
+                                       Text="◉" />
+                        </Grid>
+                    </Border>
+                    <Border x:Name="ThumbnailLoadingOverlay"
+                            Grid.Row="0"
+                            Background="#D90B1119">
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <ProgressBar Width="112" Height="3" IsIndeterminate="True" Foreground="{StaticResource PrimaryBrush}" />
+                            <TextBlock Margin="0,9,0,0" FontSize="11" Foreground="{StaticResource MutedTextBrush}" Text="サムネイルを準備中" />
+                        </StackPanel>
+                    </Border>
+                    <TextBlock x:Name="ThumbnailTimeText"
+                               Grid.Row="1"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               FontFamily="Cascadia Mono, Consolas"
+                               FontSize="13"
+                               Text="00:00:00" />
+                </Grid>
+            </Border>
+        </Popup>
 
         <Expander x:Name="ReviewPanel"
                   Grid.Row="1"

@@ -17,12 +17,21 @@ public partial class MainWindow : Window
     internal const int SeekShortcutSeconds = 5;
     internal const int LongPressDurationMilliseconds = 400;
     internal const int FullscreenControlsAutoHideMilliseconds = 3000;
+    internal const int ThumbnailPreviewDelayMilliseconds = 180;
+    internal const int BackgroundThumbnailStepMilliseconds = 30;
+    internal const double ThumbnailPreviewWidth = 240;
+    internal const double ThumbnailPreviewHeight = 175;
+    internal const double ThumbnailPreviewGap = 8;
 
     private readonly MockPlaybackSession _session = new();
     private readonly DispatcherTimer _playbackTimer;
     private readonly DispatcherTimer _loadingTimer;
     private readonly DispatcherTimer _longPressTimer;
     private readonly DispatcherTimer _fullscreenControlsTimer;
+    private readonly DispatcherTimer _thumbnailPreviewTimer;
+    private readonly DispatcherTimer _backgroundThumbnailTimer;
+    private readonly Dictionary<string, TimeSpan> _startPositions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<int> _generatedThumbnailSlots = [];
     private readonly List<RecentFileMock> _recentFiles =
     [
         new(@"C:\Videos\海辺の記録.mp4", false),
@@ -39,6 +48,11 @@ public partial class MainWindow : Window
     private WindowState _windowStateBeforeFullscreen;
     private WindowStyle _windowStyleBeforeFullscreen;
     private ResizeMode _resizeModeBeforeFullscreen;
+    private TimeSpan _pendingThumbnailPosition;
+    private int _pendingThumbnailSlot;
+    private int _nextBackgroundThumbnailSlot;
+    private double _thumbnailIntervalPercent = 1.0;
+    private double _activeThumbnailIntervalPercent = 1.0;
     private string _currentFilePath = DefaultMockFilePath;
 
     public MainWindow()
@@ -68,6 +82,18 @@ public partial class MainWindow : Window
             Interval = TimeSpan.FromMilliseconds(FullscreenControlsAutoHideMilliseconds),
         };
         _fullscreenControlsTimer.Tick += FullscreenControlsTimer_OnTick;
+
+        _thumbnailPreviewTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(ThumbnailPreviewDelayMilliseconds),
+        };
+        _thumbnailPreviewTimer.Tick += ThumbnailPreviewTimer_OnTick;
+
+        _backgroundThumbnailTimer = new DispatcherTimer(DispatcherPriority.ApplicationIdle, Dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(BackgroundThumbnailStepMilliseconds),
+        };
+        _backgroundThumbnailTimer.Tick += BackgroundThumbnailTimer_OnTick;
 
         _session.Changed += Session_OnChanged;
         VolumeSlider.ValueChanged += VolumeSlider_OnValueChanged;
@@ -101,7 +127,12 @@ public partial class MainWindow : Window
 
     private void BeginMockOpen(string path)
     {
+        CloseSeekThumbnail();
+        _backgroundThumbnailTimer.Stop();
+        _generatedThumbnailSlots.Clear();
+        _nextBackgroundThumbnailSlot = 0;
         _currentFilePath = path;
+        _activeThumbnailIntervalPercent = _thumbnailIntervalPercent;
         LoadingFileNameText.Text = Path.GetFileName(path);
         NotificationToast.Visibility = Visibility.Collapsed;
         _loadingTimer.Stop();
@@ -112,8 +143,10 @@ public partial class MainWindow : Window
     private void LoadingTimer_OnTick(object? sender, EventArgs e)
     {
         _loadingTimer.Stop();
-        _session.CompleteLoading();
+        _startPositions.TryGetValue(_currentFilePath, out var startPosition);
+        _session.CompleteLoading(startPosition);
         AddRecentFile(_currentFilePath);
+        StartBackgroundThumbnailGeneration();
     }
 
     private void PlaybackTimer_OnTick(object? sender, EventArgs e) => _session.Advance(_playbackTimer.Interval);
@@ -282,7 +315,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private void Window_OnDeactivated(object? sender, EventArgs e) => EndLongPressGesture();
+    private void Window_OnDeactivated(object? sender, EventArgs e)
+    {
+        EndLongPressGesture();
+        CloseSeekThumbnail();
+    }
 
     private void Window_OnPreviewMouseMove(object sender, MouseEventArgs e)
     {
@@ -307,6 +344,10 @@ public partial class MainWindow : Window
 
         var fullscreenItem = VideoContextMenu.Items.OfType<MenuItem>().Last();
         fullscreenItem.IsChecked = _isFullscreen;
+        var startPositionItem = VideoContextMenu.Items
+            .OfType<MenuItem>()
+            .Single(item => Equals(item.Tag, "set-start-position"));
+        startPositionItem.IsEnabled = _session.CanControlPlayback;
     }
 
     private void VideoContextMenu_OnClosed(object sender, RoutedEventArgs e)
@@ -328,6 +369,15 @@ public partial class MainWindow : Window
         {
             ToggleFullscreen();
             menuItem.IsChecked = _isFullscreen;
+        }
+        else if (tag == "set-start-position" && _session.CanControlPlayback)
+        {
+            CloseSeekThumbnail();
+            _startPositions[_currentFilePath] = _session.Position;
+            UpdateStartPositionMarker();
+            ShowNotification(
+                $"再生開始位置を {MockPlaybackSession.FormatTime(_session.Position)} に設定しました。",
+                isError: false);
         }
         else if (_session.CanControlPlayback
                  && double.TryParse(tag, System.Globalization.CultureInfo.InvariantCulture, out var playbackRate))
@@ -359,6 +409,7 @@ public partial class MainWindow : Window
         }
 
         EndLongPressGesture();
+        CloseSeekThumbnail();
         _windowStateBeforeFullscreen = WindowState;
         _windowStyleBeforeFullscreen = WindowStyle;
         _resizeModeBeforeFullscreen = ResizeMode;
@@ -385,6 +436,7 @@ public partial class MainWindow : Window
         }
 
         _fullscreenControlsTimer.Stop();
+        CloseSeekThumbnail();
         PlaybackControls.Visibility = Visibility.Visible;
         WindowState = WindowState.Normal;
         WindowStyle = _windowStyleBeforeFullscreen;
@@ -422,6 +474,7 @@ public partial class MainWindow : Window
         }
 
         PlaybackControls.Visibility = Visibility.Collapsed;
+        CloseSeekThumbnail();
     }
 
     private void ReviewSpeedComboBox_OnSelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -444,6 +497,160 @@ public partial class MainWindow : Window
 
         _isSeeking = false;
         _session.SeekTo(TimeSpan.FromSeconds(SeekSlider.Value));
+    }
+
+    private void SeekSlider_OnMouseEnter(object sender, MouseEventArgs e) => UpdateSeekThumbnail(e.GetPosition(SeekSlider).X);
+
+    private void SeekSlider_OnMouseMove(object sender, MouseEventArgs e) => UpdateSeekThumbnail(e.GetPosition(SeekSlider).X);
+
+    private void SeekSlider_OnMouseLeave(object sender, MouseEventArgs e) => CloseSeekThumbnail();
+
+    private void SeekSlider_OnSizeChanged(object sender, SizeChangedEventArgs e) => UpdateStartPositionMarker();
+
+    private void UpdateSeekThumbnail(double pointerX)
+    {
+        if (!_session.CanControlPlayback || !_session.HasKnownDuration || SeekSlider.ActualWidth <= 0)
+        {
+            CloseSeekThumbnail();
+            return;
+        }
+
+        var positionSeconds = SeekUiGeometry.PositionFromPointer(
+            pointerX,
+            SeekSlider.ActualWidth,
+            _session.Duration.TotalSeconds);
+        _pendingThumbnailPosition = TimeSpan.FromSeconds(positionSeconds);
+        _pendingThumbnailSlot = SeekUiGeometry.ThumbnailSlot(
+            positionSeconds,
+            _session.Duration.TotalSeconds,
+            _activeThumbnailIntervalPercent);
+        ThumbnailTimeText.Text = MockPlaybackSession.FormatTime(_pendingThumbnailPosition);
+        SeekThumbnailPopup.HorizontalOffset = SeekUiGeometry.PopupOffset(
+            pointerX,
+            SeekSlider.ActualWidth,
+            ThumbnailPreviewWidth);
+        SeekThumbnailPopup.VerticalOffset = -(ThumbnailPreviewHeight + ThumbnailPreviewGap);
+        SeekThumbnailPopup.IsOpen = true;
+        _thumbnailPreviewTimer.Stop();
+        if (_generatedThumbnailSlots.Contains(_pendingThumbnailSlot))
+        {
+            ShowGeneratedThumbnail();
+        }
+        else
+        {
+            ThumbnailLoadingOverlay.Visibility = Visibility.Visible;
+            ThumbnailPreviewArtwork.Opacity = 0.38;
+            _thumbnailPreviewTimer.Start();
+        }
+    }
+
+    private void ThumbnailPreviewTimer_OnTick(object? sender, EventArgs e)
+    {
+        _thumbnailPreviewTimer.Stop();
+        if (!SeekThumbnailPopup.IsOpen || !_session.HasKnownDuration)
+        {
+            return;
+        }
+
+        _generatedThumbnailSlots.Add(_pendingThumbnailSlot);
+        ShowGeneratedThumbnail();
+    }
+
+    private void ShowGeneratedThumbnail()
+    {
+        var percent = Math.Min(_pendingThumbnailSlot * _activeThumbnailIntervalPercent, 100);
+        ThumbnailFrameText.Text = $"{percent:0.##}%";
+        ThumbnailPreviewArtwork.Opacity = 1;
+        ThumbnailLoadingOverlay.Visibility = Visibility.Collapsed;
+    }
+
+    private void StartBackgroundThumbnailGeneration()
+    {
+        _backgroundThumbnailTimer.Stop();
+        if (!_session.HasKnownDuration)
+        {
+            return;
+        }
+
+        _backgroundThumbnailTimer.Start();
+    }
+
+    private void BackgroundThumbnailTimer_OnTick(object? sender, EventArgs e)
+    {
+        if (!_session.HasKnownDuration || _isSeeking)
+        {
+            return;
+        }
+
+        var slotCount = SeekUiGeometry.ThumbnailSlotCount(_activeThumbnailIntervalPercent);
+        while (_nextBackgroundThumbnailSlot < slotCount
+               && _generatedThumbnailSlots.Contains(_nextBackgroundThumbnailSlot))
+        {
+            _nextBackgroundThumbnailSlot++;
+        }
+
+        if (_nextBackgroundThumbnailSlot < slotCount)
+        {
+            var generatedSlot = _nextBackgroundThumbnailSlot;
+            _generatedThumbnailSlots.Add(generatedSlot);
+            _nextBackgroundThumbnailSlot++;
+            if (SeekThumbnailPopup.IsOpen
+                && ThumbnailLoadingOverlay.Visibility == Visibility.Visible
+                && generatedSlot == _pendingThumbnailSlot)
+            {
+                _thumbnailPreviewTimer.Stop();
+                ShowGeneratedThumbnail();
+            }
+        }
+
+        if (_nextBackgroundThumbnailSlot >= slotCount)
+        {
+            _backgroundThumbnailTimer.Stop();
+        }
+    }
+
+    private void CloseSeekThumbnail()
+    {
+        _thumbnailPreviewTimer.Stop();
+        SeekThumbnailPopup.IsOpen = false;
+    }
+
+    private void UpdateStartPositionMarker()
+    {
+        if (!_session.HasKnownDuration
+            || !_startPositions.TryGetValue(_currentFilePath, out var startPosition)
+            || startPosition > _session.Duration
+            || SeekSlider.ActualWidth <= 0)
+        {
+            StartPositionMarker.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        StartPositionMarker.Visibility = Visibility.Visible;
+        Canvas.SetLeft(
+            StartPositionMarker,
+            SeekUiGeometry.MarkerOffset(
+                startPosition.TotalSeconds,
+                _session.Duration.TotalSeconds,
+                SeekSlider.ActualWidth,
+                StartPositionMarker.Width));
+    }
+
+    private void ThumbnailSettingsMenuItem_OnClick(object sender, RoutedEventArgs e)
+    {
+        var dialog = new ThumbnailSettingsWindow(_thumbnailIntervalPercent)
+        {
+            Owner = this,
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        _thumbnailIntervalPercent = dialog.SelectedIntervalPercent;
+        ShowNotification(
+            $"サムネイル生成間隔を {_thumbnailIntervalPercent:0.00}% に変更しました。次に開く動画から適用します。",
+            isError: false);
     }
 
     private void ReviewStateButton_OnClick(object sender, RoutedEventArgs e)
@@ -664,6 +871,17 @@ public partial class MainWindow : Window
         ErrorStatePanel.Visibility = state == MediaUiState.Error ? Visibility.Visible : Visibility.Collapsed;
         MockVideoArtwork.Visibility = state is MediaUiState.Playing or MediaUiState.Paused ? Visibility.Visible : Visibility.Collapsed;
 
+        if (!_session.CanControlPlayback)
+        {
+            CloseSeekThumbnail();
+            _backgroundThumbnailTimer.Stop();
+        }
+        else if (_generatedThumbnailSlots.Count < SeekUiGeometry.ThumbnailSlotCount(_activeThumbnailIntervalPercent)
+                 && !_backgroundThumbnailTimer.IsEnabled)
+        {
+            StartBackgroundThumbnailGeneration();
+        }
+
         PlayPauseButton.IsEnabled = _session.CanControlPlayback;
         SeekSlider.IsEnabled = _session.CanControlPlayback && _session.HasKnownDuration;
         MuteButton.IsEnabled = _session.CanControlPlayback;
@@ -701,6 +919,8 @@ public partial class MainWindow : Window
         {
             TimeText.Text = "--:--:-- / --:--:--";
         }
+
+        UpdateStartPositionMarker();
 
         switch (state)
         {
@@ -749,10 +969,15 @@ public partial class MainWindow : Window
         _playbackTimer.Stop();
         _longPressTimer.Stop();
         _fullscreenControlsTimer.Stop();
+        _thumbnailPreviewTimer.Stop();
+        _backgroundThumbnailTimer.Stop();
+        SeekThumbnailPopup.IsOpen = false;
         _loadingTimer.Tick -= LoadingTimer_OnTick;
         _playbackTimer.Tick -= PlaybackTimer_OnTick;
         _longPressTimer.Tick -= LongPressTimer_OnTick;
         _fullscreenControlsTimer.Tick -= FullscreenControlsTimer_OnTick;
+        _thumbnailPreviewTimer.Tick -= ThumbnailPreviewTimer_OnTick;
+        _backgroundThumbnailTimer.Tick -= BackgroundThumbnailTimer_OnTick;
         VolumeSlider.ValueChanged -= VolumeSlider_OnValueChanged;
         ReviewSpeedComboBox.SelectionChanged -= ReviewSpeedComboBox_OnSelectionChanged;
         _session.Changed -= Session_OnChanged;

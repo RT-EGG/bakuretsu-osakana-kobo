@@ -40,11 +40,15 @@ public sealed class MockPlaybackSession
         RaiseChanged();
     }
 
-    public void CompleteLoading()
+    public void CompleteLoading(TimeSpan? startPosition = null)
     {
         State = MediaUiState.Playing;
-        Position = TimeSpan.Zero;
         Duration = MockDuration;
+        Position = startPosition is { } requestedPosition
+                   && requestedPosition >= TimeSpan.Zero
+                   && requestedPosition <= Duration
+            ? requestedPosition
+            : TimeSpan.Zero;
         RaiseChanged();
     }
 

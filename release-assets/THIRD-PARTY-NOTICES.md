@@ -6,7 +6,7 @@ This distribution uses the following unmodified third-party components.
 | --- | --- | --- | --- |
 | LibVLCSharp | 3.10.0 | LGPL-2.1 | commit `59d70e96026229e7c232ce5074ecefbf6f8959b6` |
 | LibVLCSharp.WPF | 3.10.0 | LGPL-2.1 | same LibVLCSharp commit |
-| VideoLAN.LibVLC.Windows | 3.0.23.1 | LGPL-2.1-or-later package declaration | see `CORRESPONDING-SOURCE.md` and the bundled source archive |
+| VideoLAN.LibVLC.Windows | 3.0.23.1 | LGPL-2.1-or-later package declaration | see `CORRESPONDING-SOURCE.md` and the separate source archive in the same GitHub Release |
 | .NET application host/runtime components | build-dependent | MIT and third-party licenses | see `licenses/DOTNET-LICENSE.txt` and `DOTNET-THIRD-PARTY-NOTICES.txt` |
 
 Copyright remains with VideoLAN, Microsoft, and the respective contributors.
@@ -15,7 +15,8 @@ interface-compatible builds. Reverse engineering for debugging modifications to 
 
 The complete LGPL 2.1 text is included at `licenses/LGPL-2.1.txt`.
 The exact package versions, file hashes, excluded plug-ins, and source-bundle filename are recorded in
-`release-manifest.json`.
+`release-manifest.json`. The resolved direct and transitive NuGet dependency inventory is recorded in
+`dotnet-packages.json`.
 
 The following GPL-only plug-ins found in the upstream non-GPL NuGet package are deliberately excluded:
 
@@ -23,4 +24,3 @@ The following GPL-only plug-ins found in the upstream non-GPL NuGet package are 
 - `plugins/audio_filter/libheadphone_channel_mixer_plugin.dll`
 - `plugins/codec/libx26410b_plugin.dll`
 - `plugins/lua/liblua_plugin.dll`
-

@@ -125,11 +125,24 @@ if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXIT
 
 $licenses = Join-Path $outputRoot 'licenses'
 [IO.Directory]::CreateDirectory($licenses) | Out-Null
+$documentation = Join-Path $outputRoot 'docs'
+[IO.Directory]::CreateDirectory($documentation) | Out-Null
 Copy-Item -LiteralPath (Join-Path $releaseAssets 'THIRD-PARTY-NOTICES.md') -Destination $outputRoot
 Copy-Item -LiteralPath (Join-Path $releaseAssets 'CORRESPONDING-SOURCE.md') -Destination $outputRoot
 Copy-Item -LiteralPath $lgplText -Destination $licenses
 Copy-Item -LiteralPath (Join-Path $releaseAssets 'licenses\DOTNET-LICENSE.txt') -Destination $licenses
 Copy-Item -LiteralPath (Join-Path $releaseAssets 'DOTNET-THIRD-PARTY-NOTICES.txt') -Destination $outputRoot
+Copy-Item -LiteralPath (Join-Path $repoRoot 'README.md') -Destination $outputRoot
+Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE') -Destination $outputRoot
+Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\supported-media-formats.md') -Destination $documentation
+
+$packageInventoryJson = & dotnet list $project package --include-transitive --no-restore --format json
+if ($LASTEXITCODE -ne 0) { throw "dotnet list package failed with exit code $LASTEXITCODE." }
+$packageInventory = ($packageInventoryJson -join [Environment]::NewLine) | ConvertFrom-Json
+foreach ($inventoryProject in $packageInventory.projects) {
+    $inventoryProject.path = [IO.Path]::GetRelativePath($repoRoot, $inventoryProject.path).Replace('\', '/')
+}
+$packageInventory | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $outputRoot 'dotnet-packages.json') -Encoding utf8
 
 $sourceBundleName = $null
 $sourceBundleSha256 = $null
@@ -173,7 +186,9 @@ $runtimeConfig = Get-ChildItem -LiteralPath $outputRoot -File -Filter '*.runtime
 $includedFrameworks = @()
 if ($runtimeConfig) {
     $runtime = Get-Content -Raw -LiteralPath $runtimeConfig.FullName | ConvertFrom-Json
-    $includedFrameworks = @($runtime.runtimeOptions.includedFrameworks)
+    if ($null -ne $runtime.runtimeOptions.includedFrameworks) {
+        $includedFrameworks = @($runtime.runtimeOptions.includedFrameworks)
+    }
 }
 
 [ordered]@{

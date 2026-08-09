@@ -182,7 +182,10 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
                 return false;
             }
 
-            if (!await CanStartInStagingPlayerAsync(fullPath, cancellationToken).ConfigureAwait(false))
+            // A staging player is only needed when a failed candidate must not disturb an
+            // existing playback session. Avoid decoding the first video twice on startup.
+            if (CurrentPath is not null &&
+                !await CanStartInStagingPlayerAsync(fullPath, cancellationToken).ConfigureAwait(false))
             {
                 RaiseError(new PlaybackErrorEventArgs(
                     "playback-staging-failed",

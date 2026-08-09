@@ -145,7 +145,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task OpenVideoAsync(string path)
+    internal async Task OpenVideoAsync(string path)
     {
         if (_playbackBackend is null || _errorReporter is null)
         {

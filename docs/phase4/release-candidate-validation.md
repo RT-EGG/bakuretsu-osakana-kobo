@@ -55,6 +55,7 @@ Phase 2の合格証跡と区別する。
 
 ## 残るリリース判定
 
-- クリーンなWindows 11 x64環境へ.NET 10 Desktop Runtime x64を導入し、ZIP展開から必須シナリオを確認する。
+- クリーンなWindows 11 x64環境へ.NET 10 Desktop Runtime x64を導入し、
+  `docs/phase4/clean-environment-acceptance.md`の手順でZIP展開から必須シナリオを確認する。
 - 実際のGitHub ReleaseでバイナリZIPと対応ソースZIPを同時公開し、公開アセットのハッシュを再確認する。
 - 開発者が初回リリース候補を受け入れる。

@@ -53,10 +53,22 @@ GitHub Releaseへの公開とクリーンなWindows 11環境での受け入れ�
 製品WPF実ウィンドウとD3D11VA経路で完了した。音声はミュート固定であり、実音声・聴感品質は
 Phase 2の合格証跡と区別する。
 
-## 残るリリース判定
+## 公開結果
+
+2026-08-09に[GitHub Release `v0.1.0`](https://github.com/RT-EGG/bakuretsu-osakana-kobo/releases/tag/v0.1.0)を、
+`main`のcommit `9bf6ed5e86f69274b233378f3aa0c53b0335de68`を対象として公開した。
+配布EXEは`FileVersion 0.1.0.0`、`ProductVersion 0.1.0+9bf6ed5...`である。
+
+| 公開アセット | bytes | SHA-256 |
+| --- | ---: | --- |
+| `BakuretsuOsakanaKobo-win-x64.zip` | 47,691,318 | `E962B0319CFFDDC6D120A93317301FD29B08345BB34EE43663DB906F7E9D2DB9` |
+| `bakuretsu-osakana-kobo-libvlc-sources-3.0.23.1.zip` | 450,885,351 | `E72CC13E5B0D0015B8B1944D4353E4D1645C1870B38F616DB95FD9DC28927F29` |
+
+Draft Release上で両アセットが`uploaded`となり、GitHubのSHA-256 digestがローカル値と一致した後に公開した。
+公開後、GitHub Releaseから両ZIPを新しい一時フォルダーへ再ダウンロードし、サイズとSHA-256の完全一致を再確認した。
+
+## 残存リスク
 
 - クリーンなWindows 11 x64環境での受け入れは未実施。VMや別PCをすぐに用意できないため、
   開発者判断により2026-08-09に初回リリースの必須条件から外した。未検証リスクとして残し、
   環境確保後は`docs/phase4/clean-environment-acceptance.md`の手順を使用できる。
-- 実際のGitHub ReleaseでバイナリZIPと対応ソースZIPを同時公開し、公開アセットのハッシュを再確認する。
-- 開発者が初回リリース候補を受け入れる。

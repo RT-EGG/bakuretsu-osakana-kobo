@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="src/BakuretsuOsakanaKobo.App/BakuretsuOsakanaKobo.App.csproj" />
+  <Project Path="src/BakuretsuOsakanaKobo.Infrastructure/BakuretsuOsakanaKobo.Infrastructure.csproj" />
+  <Project Path="src/BakuretsuOsakanaKobo.Playback/BakuretsuOsakanaKobo.Playback.csproj" />
+  <Project Path="tests/BakuretsuOsakanaKobo.App.Tests/BakuretsuOsakanaKobo.App.Tests.csproj" />
+</Solution>

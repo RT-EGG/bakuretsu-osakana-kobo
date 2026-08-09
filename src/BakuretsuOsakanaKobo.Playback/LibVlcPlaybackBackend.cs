@@ -294,8 +294,6 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         MediaPlayer.Paused += OnStateChanged;
         MediaPlayer.Stopped += OnStateChanged;
         MediaPlayer.EndReached += OnStateChanged;
-        MediaPlayer.LengthChanged += OnStateChanged;
-        MediaPlayer.TimeChanged += OnStateChanged;
         MediaPlayer.EncounteredError += OnEncounteredError;
     }
 
@@ -305,8 +303,6 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         MediaPlayer.Paused -= OnStateChanged;
         MediaPlayer.Stopped -= OnStateChanged;
         MediaPlayer.EndReached -= OnStateChanged;
-        MediaPlayer.LengthChanged -= OnStateChanged;
-        MediaPlayer.TimeChanged -= OnStateChanged;
         MediaPlayer.EncounteredError -= OnEncounteredError;
     }
 

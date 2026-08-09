@@ -18,6 +18,7 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <Menu Grid.Row="0">
@@ -54,8 +55,55 @@
             </vlc:VideoView>
         </Grid>
 
-        <Border x:Name="NotificationBorder"
+        <Border x:Name="PlaybackControls"
                 Grid.Row="2"
+                Padding="10,8"
+                Background="{StaticResource PanelBrush}"
+                BorderBrush="{StaticResource BorderBrush}"
+                BorderThickness="0,1,0,0">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <Button x:Name="PlayPauseButton"
+                        Grid.Column="0"
+                        Width="42"
+                        Height="34"
+                        Padding="0"
+                        FontSize="16"
+                        IsEnabled="False"
+                        ToolTip="動画を開くと再生できます"
+                        ToolTipService.ShowOnDisabled="True"
+                        Click="PlayPauseButton_OnClick"
+                        Content="▶"
+                        AutomationProperties.Name="再生" />
+                <Slider x:Name="SeekSlider"
+                        Grid.Column="1"
+                        Height="22"
+                        Margin="12,0,14,0"
+                        VerticalAlignment="Center"
+                        Minimum="0"
+                        Maximum="1"
+                        IsEnabled="False"
+                        ToolTip="シーク操作は実装中です"
+                        ToolTipService.ShowOnDisabled="True"
+                        AutomationProperties.Name="再生位置" />
+                <TextBlock x:Name="TimeText"
+                           Grid.Column="2"
+                           MinWidth="164"
+                           VerticalAlignment="Center"
+                           FontFamily="Cascadia Mono, Consolas"
+                           FontSize="13"
+                           Text="--:--:-- / --:--:--"
+                           AutomationProperties.Name="再生時刻" />
+            </Grid>
+        </Border>
+
+        <Border x:Name="NotificationBorder"
+                Grid.Row="3"
                 Margin="12"
                 Padding="12"
                 Background="#2B2026"

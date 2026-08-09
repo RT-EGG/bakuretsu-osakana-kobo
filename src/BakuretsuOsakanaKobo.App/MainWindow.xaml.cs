@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.ComponentModel;
 using System.IO;
 using System.Windows;
+using System.Windows.Automation;
 using BakuretsuOsakanaKobo.Infrastructure.Errors;
 using BakuretsuOsakanaKobo.Infrastructure.Persistence;
 using BakuretsuOsakanaKobo.Playback;
@@ -43,7 +44,10 @@ public partial class MainWindow : Window
         if (playbackBackend is not null)
         {
             playbackBackend.ErrorOccurred += PlaybackBackend_OnErrorOccurred;
+            playbackBackend.StateChanged += PlaybackBackend_OnStateChanged;
         }
+
+        UpdatePlaybackButton();
     }
 
     internal void ShowNotification(UserNotification notification)
@@ -111,6 +115,10 @@ public partial class MainWindow : Window
         finally
         {
             _openTask = null;
+            if (!_closeRequested)
+            {
+                UpdatePlaybackButton();
+            }
         }
     }
 
@@ -122,6 +130,7 @@ public partial class MainWindow : Window
         }
 
         OpenVideoMenuItem.IsEnabled = false;
+        PlayPauseButton.IsEnabled = false;
         var hadCurrentVideo = _playbackBackend.CurrentPath is not null;
         if (!hadCurrentVideo)
         {
@@ -137,7 +146,7 @@ public partial class MainWindow : Window
             if (await _playbackBackend.OpenAndPlayAsync(path, openCancellation.Token))
             {
                 EmptyStatePanel.Visibility = Visibility.Collapsed;
-                Title = $"{ApplicationInfo.DisplayName} - {Path.GetFileName(path)}";
+                Title = $"{Path.GetFileName(path)} - {ApplicationInfo.DisplayName}";
                 NotificationBorder.Visibility = Visibility.Collapsed;
             }
             else if (!hadCurrentVideo)
@@ -177,8 +186,45 @@ public partial class MainWindow : Window
             if (!_closeRequested)
             {
                 OpenVideoMenuItem.IsEnabled = true;
+                UpdatePlaybackButton();
             }
         }
+    }
+
+    private void PlayPauseButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (_playbackBackend?.CurrentPath is null || _openTask is not null)
+        {
+            return;
+        }
+
+        if (_playbackBackend.IsPlaying)
+        {
+            _playbackBackend.Pause();
+        }
+        else
+        {
+            _playbackBackend.Play();
+        }
+    }
+
+    private void PlaybackBackend_OnStateChanged(object? sender, EventArgs eventArgs)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            try
+            {
+                _ = Dispatcher.BeginInvoke(UpdatePlaybackButton);
+            }
+            catch (InvalidOperationException)
+            {
+                // The window Dispatcher is already shutting down.
+            }
+
+            return;
+        }
+
+        UpdatePlaybackButton();
     }
 
     private void PlaybackBackend_OnErrorOccurred(object? sender, PlaybackErrorEventArgs eventArgs)
@@ -238,6 +284,7 @@ public partial class MainWindow : Window
         if (_playbackBackend is not null)
         {
             _playbackBackend.ErrorOccurred -= PlaybackBackend_OnErrorOccurred;
+            _playbackBackend.StateChanged -= PlaybackBackend_OnStateChanged;
         }
 
         VideoView.MediaPlayer = null;
@@ -270,6 +317,22 @@ public partial class MainWindow : Window
         EmptyStateDescriptionText.Text = "「ファイル」→「開く」からmp4またはwmvを選択してください";
         EmptyStatePanel.Visibility = Visibility.Visible;
         Title = ApplicationInfo.DisplayName;
+    }
+
+    private void UpdatePlaybackButton()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        var presentation = PlaybackButtonPresentation.From(
+            _playbackBackend?.CurrentPath is not null,
+            _playbackBackend?.IsPlaying == true);
+        PlayPauseButton.IsEnabled = presentation.IsEnabled && _openTask is null;
+        PlayPauseButton.Content = presentation.Glyph;
+        PlayPauseButton.ToolTip = presentation.ToolTip;
+        AutomationProperties.SetName(PlayPauseButton, presentation.AccessibleName);
     }
 
     private void ExitMenuItem_OnClick(object sender, RoutedEventArgs e) => Close();

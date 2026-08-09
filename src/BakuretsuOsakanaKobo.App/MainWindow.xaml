@@ -34,7 +34,10 @@
             </MenuItem>
         </Menu>
 
-        <Grid Grid.Row="1" Background="Black">
+        <Grid x:Name="VideoSurface"
+              Grid.Row="1"
+              Background="Black"
+              PreviewMouseWheel="VideoSurface_OnPreviewMouseWheel">
             <vlc:VideoView x:Name="VideoView"
                            HorizontalContentAlignment="Stretch"
                            VerticalContentAlignment="Stretch">
@@ -65,6 +68,9 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="96" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
@@ -103,6 +109,44 @@
                            FontSize="13"
                            Text="--:--:-- / --:--:--"
                            AutomationProperties.Name="再生時刻" />
+                <Button x:Name="MuteButton"
+                        Grid.Column="3"
+                        Width="38"
+                        Height="34"
+                        Margin="12,0,6,0"
+                        Padding="0"
+                        FontSize="16"
+                        IsEnabled="False"
+                        ToolTip="動画を開くとミュートを変更できます"
+                        ToolTipService.ShowOnDisabled="True"
+                        Click="MuteButton_OnClick"
+                        Content="🔊"
+                        AutomationProperties.Name="ミュート" />
+                <Slider x:Name="VolumeSlider"
+                        Grid.Column="4"
+                        Height="22"
+                        VerticalAlignment="Center"
+                        Minimum="0"
+                        Maximum="100"
+                        Value="100"
+                        SmallChange="1"
+                        LargeChange="5"
+                        TickFrequency="5"
+                        IsMoveToPointEnabled="True"
+                        IsEnabled="False"
+                        ToolTip="動画を開くと音量を変更できます"
+                        ToolTipService.ShowOnDisabled="True"
+                        ValueChanged="VolumeSlider_OnValueChanged"
+                        AutomationProperties.Name="音量" />
+                <TextBlock x:Name="VolumeText"
+                           Grid.Column="5"
+                           MinWidth="43"
+                           Margin="7,0,0,0"
+                           VerticalAlignment="Center"
+                           FontFamily="Cascadia Mono, Consolas"
+                           FontSize="13"
+                           Text="100%"
+                           AutomationProperties.Name="音量 100%" />
             </Grid>
         </Border>
 

@@ -7,6 +7,8 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
     private readonly LibVLC _libVlc;
     private readonly Action<Exception>? _callbackExceptionHandler;
     private Media? _currentMedia;
+    private int _volumePercent = PlaybackVolume.DefaultPercent;
+    private bool _isMuted;
     private bool _disposed;
 
     public LibVlcPlaybackBackend(Action<Exception>? callbackExceptionHandler = null)
@@ -20,6 +22,8 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         {
             mediaPlayer = new MediaPlayer(_libVlc);
             MediaPlayer = mediaPlayer;
+            MediaPlayer.Volume = PlaybackVolume.DefaultPercent;
+            MediaPlayer.Mute = false;
             SubscribePlayerEvents();
         }
         catch
@@ -69,6 +73,24 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         {
             ThrowIfDisposed();
             return Math.Max(0, MediaPlayer.Time);
+        }
+    }
+
+    public int VolumePercent
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _volumePercent;
+        }
+    }
+
+    public bool IsMuted
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _isMuted;
         }
     }
 
@@ -208,6 +230,8 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
                 return false;
             }
 
+            ApplyVolumeState();
+
             var previousMedia = _currentMedia;
             _currentMedia = nextMedia;
             nextMedia = null;
@@ -273,6 +297,26 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
     {
         ThrowIfDisposed();
         MediaPlayer.Position = (float)PlaybackPosition.Normalize(normalizedPosition);
+    }
+
+    public void SetVolumePercent(int volumePercent)
+    {
+        ThrowIfDisposed();
+        _volumePercent = PlaybackVolume.ClampBasic(volumePercent);
+        MediaPlayer.Volume = _volumePercent;
+    }
+
+    public void SetMuted(bool isMuted)
+    {
+        ThrowIfDisposed();
+        _isMuted = isMuted;
+        MediaPlayer.Mute = isMuted;
+    }
+
+    private void ApplyVolumeState()
+    {
+        MediaPlayer.Volume = _volumePercent;
+        MediaPlayer.Mute = _isMuted;
     }
 
     public void Dispose()

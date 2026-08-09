@@ -3,6 +3,7 @@ using System.IO;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using BakuretsuOsakanaKobo.Infrastructure.Diagnostics;
 using BakuretsuOsakanaKobo.Infrastructure.Errors;
@@ -32,7 +33,7 @@ internal static class Program
             WindowStartupLocation = WindowStartupLocation.CenterScreen,
         };
         var backend = new LibVlcPlaybackBackend();
-        backend.MediaPlayer.Mute = true;
+        backend.SetMuted(true);
         window.ConfigureServices(
             new PortableDataPaths(AppContext.BaseDirectory),
             new ErrorReporter(new NullDiagnosticLog(), new NullNotificationSink()),
@@ -45,6 +46,11 @@ internal static class Program
             try
             {
                 var seekSlider = (Slider)window.FindName("SeekSlider");
+                var volumeSlider = (Slider)window.FindName("VolumeSlider");
+                var muteButton = (Button)window.FindName("MuteButton");
+                var volumeText = (TextBlock)window.FindName("VolumeText");
+                var videoSurface = (UIElement)window.FindName("VideoSurface");
+                Ensure(!volumeSlider.IsEnabled && !muteButton.IsEnabled, "Volume controls must start disabled.");
                 var openMilliseconds = await MeasureOpenAsync(window, seekSlider, backend, args[0]);
                 var lengthMilliseconds = backend.LengthMilliseconds;
 
@@ -59,6 +65,13 @@ internal static class Program
                     normalizedPosition: 0.9,
                     lengthMilliseconds);
 
+                var volumeValidation = ValidateVolumeControls(
+                    volumeSlider,
+                    muteButton,
+                    volumeText,
+                    videoSurface,
+                    backend);
+
                 var report = new
                 {
                     success = true,
@@ -69,6 +82,7 @@ internal static class Program
                     seek50PercentMs = seek50Milliseconds,
                     seek90PercentMs = seek90Milliseconds,
                     lengthMilliseconds,
+                    volumeValidation,
                 };
                 WriteReport(args[1], report);
                 Console.WriteLine(JsonSerializer.Serialize(report));
@@ -86,6 +100,67 @@ internal static class Program
 
         application.Run(window);
         return exitCode;
+    }
+
+    private static object ValidateVolumeControls(
+        Slider volumeSlider,
+        Button muteButton,
+        TextBlock volumeText,
+        UIElement videoSurface,
+        LibVlcPlaybackBackend backend)
+    {
+        Ensure(volumeSlider.IsEnabled && muteButton.IsEnabled, "Volume controls did not become enabled.");
+        Ensure(backend.IsMuted, "Validation playback must remain muted.");
+
+        volumeSlider.Value = 65;
+        Ensure(backend.VolumePercent == 65, "The slider did not update backend volume to 65%.");
+        Ensure(volumeText.Text == "65%", "The volume label did not update to 65%.");
+
+        backend.Pause();
+        muteButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Ensure(!backend.IsMuted, "The mute button did not unmute paused playback.");
+        muteButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Ensure(backend.IsMuted, "The mute button did not restore mute.");
+
+        volumeSlider.Value = 95;
+        var wheelUp = new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, 120)
+        {
+            RoutedEvent = UIElement.PreviewMouseWheelEvent,
+        };
+        videoSurface.RaiseEvent(wheelUp);
+        Ensure(wheelUp.Handled && backend.VolumePercent == 100, "Wheel-up did not reach 100%.");
+
+        var wheelAboveMaximum = new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, 120)
+        {
+            RoutedEvent = UIElement.PreviewMouseWheelEvent,
+        };
+        videoSurface.RaiseEvent(wheelAboveMaximum);
+        Ensure(backend.VolumePercent == 100, "Wheel-up exceeded the 100% basic limit.");
+
+        var wheelDown = new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, -120)
+        {
+            RoutedEvent = UIElement.PreviewMouseWheelEvent,
+        };
+        videoSurface.RaiseEvent(wheelDown);
+        Ensure(wheelDown.Handled && backend.VolumePercent == 95, "Wheel-down did not reduce volume by 5%.");
+
+        return new
+        {
+            sliderPercent = 65,
+            muteToggle = true,
+            wheelStepPercent = PlaybackVolume.WheelStepPercent,
+            maximumPercent = PlaybackVolume.BasicMaximumPercent,
+            finalPercent = backend.VolumePercent,
+            finalMuted = backend.IsMuted,
+        };
+    }
+
+    private static void Ensure(bool condition, string message)
+    {
+        if (!condition)
+        {
+            throw new InvalidOperationException(message);
+        }
     }
 
     private static async Task<double> MeasureOpenAsync(

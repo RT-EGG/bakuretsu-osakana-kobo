@@ -4,6 +4,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Threading;
 using BakuretsuOsakanaKobo.Infrastructure.Errors;
 using BakuretsuOsakanaKobo.Infrastructure.Persistence;
@@ -24,7 +25,9 @@ public partial class MainWindow : Window
     private Task? _openTask;
     private bool _isOpeningVideo;
     private bool _isUpdatingSeekSlider;
+    private bool _isUpdatingVolumeSlider;
     private bool _isSeekDragging;
+    private bool _hasPlaybackError;
     private DateTime _seekPresentationHoldUntilUtc;
     private bool _closeRequested;
     private bool _allowClose;
@@ -66,6 +69,7 @@ public partial class MainWindow : Window
 
         UpdatePlaybackButton();
         UpdatePlaybackTimeline();
+        UpdateVolumeControls();
     }
 
     internal void ShowNotification(UserNotification notification)
@@ -128,6 +132,7 @@ public partial class MainWindow : Window
         _isOpeningVideo = true;
         UpdatePlaybackButton();
         UpdatePlaybackTimeline();
+        UpdateVolumeControls();
         _openTask = OpenVideoAsync(dialog.FileName);
         try
         {
@@ -141,6 +146,7 @@ public partial class MainWindow : Window
             {
                 UpdatePlaybackButton();
                 UpdatePlaybackTimeline();
+                UpdateVolumeControls();
             }
         }
     }
@@ -169,6 +175,7 @@ public partial class MainWindow : Window
         {
             if (await _playbackBackend.OpenAndPlayAsync(path, openCancellation.Token))
             {
+                _hasPlaybackError = false;
                 EmptyStatePanel.Visibility = Visibility.Collapsed;
                 Title = $"{Path.GetFileName(path)} - {ApplicationInfo.DisplayName}";
                 NotificationBorder.Visibility = Visibility.Collapsed;
@@ -212,6 +219,7 @@ public partial class MainWindow : Window
                 OpenVideoMenuItem.IsEnabled = true;
                 UpdatePlaybackButton();
                 UpdatePlaybackTimeline();
+                UpdateVolumeControls();
             }
         }
     }
@@ -243,6 +251,7 @@ public partial class MainWindow : Window
                 {
                     UpdatePlaybackButton();
                     UpdatePlaybackTimeline();
+                    UpdateVolumeControls();
                 });
             }
             catch (InvalidOperationException)
@@ -255,6 +264,7 @@ public partial class MainWindow : Window
 
         UpdatePlaybackButton();
         UpdatePlaybackTimeline();
+        UpdateVolumeControls();
     }
 
     private void PlaybackBackend_OnErrorOccurred(object? sender, PlaybackErrorEventArgs eventArgs)
@@ -276,6 +286,12 @@ public partial class MainWindow : Window
         if (_disposed || _errorReporter is null)
         {
             return;
+        }
+
+        if (eventArgs.EventCode == "playback-native-error")
+        {
+            _hasPlaybackError = true;
+            UpdateVolumeControls();
         }
 
         _errorReporter.Report(
@@ -405,6 +421,82 @@ public partial class MainWindow : Window
         }
 
         TimeText.Text = presentation.TimeText;
+    }
+
+    private void UpdateVolumeControls()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        var backend = _playbackBackend;
+        var presentation = PlaybackVolumePresentation.From(
+            backend?.CurrentPath is not null,
+            _isOpeningVideo || _openTask is not null,
+            _hasPlaybackError,
+            backend?.VolumePercent ?? PlaybackVolume.DefaultPercent,
+            backend?.IsMuted == true);
+
+        MuteButton.IsEnabled = presentation.IsEnabled;
+        MuteButton.Content = presentation.MuteGlyph;
+        MuteButton.ToolTip = presentation.MuteToolTip;
+        AutomationProperties.SetName(MuteButton, presentation.MuteAccessibleName);
+        VolumeSlider.IsEnabled = presentation.IsEnabled;
+        VolumeSlider.ToolTip = presentation.VolumeToolTip;
+
+        _isUpdatingVolumeSlider = true;
+        try
+        {
+            VolumeSlider.Value = presentation.VolumePercent;
+        }
+        finally
+        {
+            _isUpdatingVolumeSlider = false;
+        }
+
+        VolumeText.Text = $"{presentation.VolumePercent}%";
+        AutomationProperties.SetName(VolumeText, $"音量 {presentation.VolumePercent}%");
+    }
+
+    private void MuteButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        var backend = _playbackBackend;
+        if (!MuteButton.IsEnabled || backend is null)
+        {
+            return;
+        }
+
+        backend.SetMuted(!backend.IsMuted);
+        UpdateVolumeControls();
+    }
+
+    private void VolumeSlider_OnValueChanged(
+        object sender,
+        RoutedPropertyChangedEventArgs<double> eventArgs)
+    {
+        var backend = _playbackBackend;
+        if (_isUpdatingVolumeSlider || !VolumeSlider.IsEnabled || backend is null)
+        {
+            return;
+        }
+
+        backend.SetVolumePercent((int)Math.Round(eventArgs.NewValue));
+        UpdateVolumeControls();
+    }
+
+    private void VideoSurface_OnPreviewMouseWheel(object sender, MouseWheelEventArgs eventArgs)
+    {
+        var backend = _playbackBackend;
+        if (eventArgs.Delta == 0 || !VolumeSlider.IsEnabled || backend is null)
+        {
+            return;
+        }
+
+        backend.SetVolumePercent(
+            backend.VolumePercent + (Math.Sign(eventArgs.Delta) * PlaybackVolume.WheelStepPercent));
+        UpdateVolumeControls();
+        eventArgs.Handled = true;
     }
 
     private void SeekSlider_OnValueChanged(object sender, RoutedPropertyChangedEventArgs<double> eventArgs)

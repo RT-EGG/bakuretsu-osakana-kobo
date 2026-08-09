@@ -14,6 +14,12 @@ public sealed class PlaybackBackendContractTests
         Assert.True(backend.IsPlaying);
         Assert.Equal("sample.mp4", backend.CurrentPath);
 
+        backend.SetVolumePercent(65);
+        backend.SetMuted(true);
+
+        Assert.Equal(65, backend.VolumePercent);
+        Assert.True(backend.IsMuted);
+
         backend.Pause();
 
         Assert.False(backend.IsPlaying);
@@ -28,6 +34,24 @@ public sealed class PlaybackBackendContractTests
         backend.Dispose();
 
         Assert.Throws<ObjectDisposedException>(() => _ = backend.IsPlaying);
+    }
+
+    [Fact]
+    public void LibVlcBackendClampsBasicVolumeAndKeepsMuteIndependent()
+    {
+        using var backend = new LibVlcPlaybackBackend();
+
+        Assert.Equal(PlaybackVolume.DefaultPercent, backend.VolumePercent);
+        Assert.False(backend.IsMuted);
+
+        backend.SetVolumePercent(101);
+        Assert.Equal(PlaybackVolume.BasicMaximumPercent, backend.VolumePercent);
+
+        backend.SetMuted(true);
+        backend.SetVolumePercent(-1);
+
+        Assert.Equal(0, backend.VolumePercent);
+        Assert.True(backend.IsMuted);
     }
 
     [Fact]
@@ -95,6 +119,10 @@ public sealed class PlaybackBackendContractTests
 
         public long TimeMilliseconds => 0;
 
+        public int VolumePercent { get; private set; } = PlaybackVolume.DefaultPercent;
+
+        public bool IsMuted { get; private set; }
+
         public string? CurrentPath { get; private set; }
 
         public Task<bool> OpenAndPlayAsync(string path, CancellationToken cancellationToken = default)
@@ -114,6 +142,11 @@ public sealed class PlaybackBackendContractTests
         public void Seek(double normalizedPosition)
         {
         }
+
+        public void SetVolumePercent(int volumePercent) =>
+            VolumePercent = PlaybackVolume.ClampBasic(volumePercent);
+
+        public void SetMuted(bool isMuted) => IsMuted = isMuted;
 
         public void Dispose()
         {

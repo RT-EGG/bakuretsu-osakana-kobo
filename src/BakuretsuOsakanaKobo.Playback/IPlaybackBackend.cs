@@ -14,6 +14,10 @@ public interface IPlaybackBackend : IDisposable
 
     long TimeMilliseconds { get; }
 
+    int VolumePercent { get; }
+
+    bool IsMuted { get; }
+
     string? CurrentPath { get; }
 
     Task<bool> OpenAndPlayAsync(string path, CancellationToken cancellationToken = default);
@@ -25,4 +29,8 @@ public interface IPlaybackBackend : IDisposable
     void Stop();
 
     void Seek(double normalizedPosition);
+
+    void SetVolumePercent(int volumePercent);
+
+    void SetMuted(bool isMuted);
 }

@@ -89,6 +89,8 @@ public sealed class PlaybackBackendContractTests
 
         public bool IsPlaying { get; private set; }
 
+        public bool IsSeekable => false;
+
         public long LengthMilliseconds => 0;
 
         public long TimeMilliseconds => 0;

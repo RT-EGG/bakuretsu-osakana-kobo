@@ -3,6 +3,8 @@ using System.ComponentModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Controls.Primitives;
+using System.Windows.Threading;
 using BakuretsuOsakanaKobo.Infrastructure.Errors;
 using BakuretsuOsakanaKobo.Infrastructure.Persistence;
 using BakuretsuOsakanaKobo.Playback;
@@ -12,11 +14,18 @@ namespace BakuretsuOsakanaKobo;
 
 public partial class MainWindow : Window
 {
+    private static readonly TimeSpan PlaybackTimelineRefreshInterval = TimeSpan.FromMilliseconds(200);
+
+    private readonly DispatcherTimer _playbackTimelineTimer;
     private PortableDataPaths? _paths;
     private ErrorReporter? _errorReporter;
     private IPlaybackBackend? _playbackBackend;
     private CancellationTokenSource? _openCancellation;
     private Task? _openTask;
+    private bool _isOpeningVideo;
+    private bool _isUpdatingSeekSlider;
+    private bool _isSeekDragging;
+    private DateTime _seekPresentationHoldUntilUtc;
     private bool _closeRequested;
     private bool _allowClose;
     private bool _disposed;
@@ -24,6 +33,13 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _playbackTimelineTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+        {
+            Interval = PlaybackTimelineRefreshInterval,
+        };
+        _playbackTimelineTimer.Tick += PlaybackTimelineTimer_OnTick;
+        SeekSlider.AddHandler(Thumb.DragStartedEvent, new DragStartedEventHandler(SeekSlider_OnDragStarted));
+        SeekSlider.AddHandler(Thumb.DragCompletedEvent, new DragCompletedEventHandler(SeekSlider_OnDragCompleted));
     }
 
     internal void ConfigureServices(
@@ -45,9 +61,11 @@ public partial class MainWindow : Window
         {
             playbackBackend.ErrorOccurred += PlaybackBackend_OnErrorOccurred;
             playbackBackend.StateChanged += PlaybackBackend_OnStateChanged;
+            _playbackTimelineTimer.Start();
         }
 
         UpdatePlaybackButton();
+        UpdatePlaybackTimeline();
     }
 
     internal void ShowNotification(UserNotification notification)
@@ -107,6 +125,9 @@ public partial class MainWindow : Window
             return;
         }
 
+        _isOpeningVideo = true;
+        UpdatePlaybackButton();
+        UpdatePlaybackTimeline();
         _openTask = OpenVideoAsync(dialog.FileName);
         try
         {
@@ -115,9 +136,11 @@ public partial class MainWindow : Window
         finally
         {
             _openTask = null;
+            _isOpeningVideo = false;
             if (!_closeRequested)
             {
                 UpdatePlaybackButton();
+                UpdatePlaybackTimeline();
             }
         }
     }
@@ -131,6 +154,7 @@ public partial class MainWindow : Window
 
         OpenVideoMenuItem.IsEnabled = false;
         PlayPauseButton.IsEnabled = false;
+        UpdatePlaybackTimeline();
         var hadCurrentVideo = _playbackBackend.CurrentPath is not null;
         if (!hadCurrentVideo)
         {
@@ -187,6 +211,7 @@ public partial class MainWindow : Window
             {
                 OpenVideoMenuItem.IsEnabled = true;
                 UpdatePlaybackButton();
+                UpdatePlaybackTimeline();
             }
         }
     }
@@ -214,7 +239,11 @@ public partial class MainWindow : Window
         {
             try
             {
-                _ = Dispatcher.BeginInvoke(UpdatePlaybackButton);
+                _ = Dispatcher.BeginInvoke(() =>
+                {
+                    UpdatePlaybackButton();
+                    UpdatePlaybackTimeline();
+                });
             }
             catch (InvalidOperationException)
             {
@@ -225,6 +254,7 @@ public partial class MainWindow : Window
         }
 
         UpdatePlaybackButton();
+        UpdatePlaybackTimeline();
     }
 
     private void PlaybackBackend_OnErrorOccurred(object? sender, PlaybackErrorEventArgs eventArgs)
@@ -281,6 +311,10 @@ public partial class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         _disposed = true;
+        _playbackTimelineTimer.Stop();
+        _playbackTimelineTimer.Tick -= PlaybackTimelineTimer_OnTick;
+        SeekSlider.RemoveHandler(Thumb.DragStartedEvent, new DragStartedEventHandler(SeekSlider_OnDragStarted));
+        SeekSlider.RemoveHandler(Thumb.DragCompletedEvent, new DragCompletedEventHandler(SeekSlider_OnDragCompleted));
         if (_playbackBackend is not null)
         {
             _playbackBackend.ErrorOccurred -= PlaybackBackend_OnErrorOccurred;
@@ -333,6 +367,77 @@ public partial class MainWindow : Window
         PlayPauseButton.Content = presentation.Glyph;
         PlayPauseButton.ToolTip = presentation.ToolTip;
         AutomationProperties.SetName(PlayPauseButton, presentation.AccessibleName);
+    }
+
+    private void PlaybackTimelineTimer_OnTick(object? sender, EventArgs eventArgs) =>
+        UpdatePlaybackTimeline();
+
+    private void UpdatePlaybackTimeline()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        var backend = _playbackBackend;
+        var presentation = PlaybackTimelinePresentation.From(
+            backend?.CurrentPath is not null,
+            _isOpeningVideo,
+            backend?.IsSeekable == true,
+            backend?.TimeMilliseconds ?? 0,
+            backend?.LengthMilliseconds ?? 0);
+
+        SeekSlider.IsEnabled = presentation.IsSeekEnabled;
+        SeekSlider.ToolTip = presentation.SeekToolTip;
+        if (_isSeekDragging || DateTime.UtcNow < _seekPresentationHoldUntilUtc)
+        {
+            return;
+        }
+
+        _isUpdatingSeekSlider = true;
+        try
+        {
+            SeekSlider.Value = presentation.NormalizedPosition;
+        }
+        finally
+        {
+            _isUpdatingSeekSlider = false;
+        }
+
+        TimeText.Text = presentation.TimeText;
+    }
+
+    private void SeekSlider_OnValueChanged(object sender, RoutedPropertyChangedEventArgs<double> eventArgs)
+    {
+        var backend = _playbackBackend;
+        if (_isUpdatingSeekSlider ||
+            !SeekSlider.IsEnabled ||
+            _isOpeningVideo ||
+            backend?.CurrentPath is null)
+        {
+            return;
+        }
+
+        var normalizedPosition = PlaybackPosition.Normalize(eventArgs.NewValue);
+        backend.Seek(normalizedPosition);
+        _seekPresentationHoldUntilUtc = DateTime.UtcNow + PlaybackTimelineRefreshInterval;
+
+        var lengthMilliseconds = backend.LengthMilliseconds;
+        if (lengthMilliseconds > 0)
+        {
+            var previewMilliseconds = (long)(normalizedPosition * lengthMilliseconds);
+            TimeText.Text =
+                $"{PlaybackTimelinePresentation.FormatMilliseconds(previewMilliseconds)} / " +
+                PlaybackTimelinePresentation.FormatMilliseconds(lengthMilliseconds);
+        }
+    }
+
+    private void SeekSlider_OnDragStarted(object sender, DragStartedEventArgs eventArgs) =>
+        _isSeekDragging = true;
+
+    private void SeekSlider_OnDragCompleted(object sender, DragCompletedEventArgs eventArgs)
+    {
+        _isSeekDragging = false;
     }
 
     private void ExitMenuItem_OnClick(object sender, RoutedEventArgs e) => Close();

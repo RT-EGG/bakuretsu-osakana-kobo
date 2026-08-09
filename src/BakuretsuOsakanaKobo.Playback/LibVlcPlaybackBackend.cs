@@ -45,6 +45,15 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         }
     }
 
+    public bool IsSeekable
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return MediaPlayer.IsSeekable;
+        }
+    }
+
     public long LengthMilliseconds
     {
         get
@@ -260,7 +269,7 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
     public void Seek(double normalizedPosition)
     {
         ThrowIfDisposed();
-        MediaPlayer.Position = (float)Math.Clamp(normalizedPosition, 0d, 1d);
+        MediaPlayer.Position = (float)PlaybackPosition.Normalize(normalizedPosition);
     }
 
     public void Dispose()

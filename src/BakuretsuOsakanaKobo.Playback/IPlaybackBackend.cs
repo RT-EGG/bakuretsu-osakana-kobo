@@ -8,6 +8,8 @@ public interface IPlaybackBackend : IDisposable
 
     bool IsPlaying { get; }
 
+    bool IsSeekable { get; }
+
     long LengthMilliseconds { get; }
 
     long TimeMilliseconds { get; }

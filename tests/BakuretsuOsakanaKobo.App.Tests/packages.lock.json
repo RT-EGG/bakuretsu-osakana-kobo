@@ -29,6 +29,19 @@
         "resolved": "3.1.4",
         "contentHash": "5mj99LvCqrq3CNi06xYdyIAXOEh+5b33F2nErCzI5zWiDdLHXiPXEWFSUAF8zlIv0ZWqjZNCwHTQeAPYbF3pCg=="
       },
+      "LibVLCSharp": {
+        "type": "Transitive",
+        "resolved": "3.10.0",
+        "contentHash": "VHuOfq8Xtb/lNz0asvCm5qDjgTmfB3m3lC40Dz9iH9oL3DM0fSXHjZaLxdtYVr5nsldJoh5BTeG8MtODprhC9Q=="
+      },
+      "LibVLCSharp.WPF": {
+        "type": "Transitive",
+        "resolved": "3.10.0",
+        "contentHash": "W7MFdY0QZBhATS3ZIMZSY1UYV6MqDxb+GibNzT3AzKNzDQX2Kzf27OZA5B0gA7fa2FYq79P7Jvlvdbbygis63g==",
+        "dependencies": {
+          "LibVLCSharp": "3.10.0"
+        }
+      },
       "Microsoft.CodeCoverage": {
         "type": "Transitive",
         "resolved": "17.14.1",
@@ -52,6 +65,11 @@
         "type": "Transitive",
         "resolved": "13.0.3",
         "contentHash": "HrC5BXdl00IP9zeV+0Z848QWPAoCr9P3bDEZguI+gkLcBKAOxix/tLEAAHC+UvDNPv4a2d18lOReHMOagPa+zQ=="
+      },
+      "VideoLAN.LibVLC.Windows": {
+        "type": "Transitive",
+        "resolved": "3.0.23.1",
+        "contentHash": "yTGNrzj+Q/t72VNKK0d64jZ+8BGu5Vcp2nxpZ2ll350LkRWKSwqShGpZWcVxXVP8TiMbeGML09+Jzz3hNsIcqA=="
       },
       "xunit.abstractions": {
         "type": "Transitive",
@@ -96,11 +114,20 @@
       "BakuretsuOsakanaKobo": {
         "type": "Project",
         "dependencies": {
-          "BakuretsuOsakanaKobo.Infrastructure": "[1.0.0, )"
+          "BakuretsuOsakanaKobo.Infrastructure": "[1.0.0, )",
+          "BakuretsuOsakanaKobo.Playback": "[1.0.0, )",
+          "LibVLCSharp.WPF": "[3.10.0, )",
+          "VideoLAN.LibVLC.Windows": "[3.0.23.1, )"
         }
       },
       "bakuretsuosakanakobo.infrastructure": {
         "type": "Project"
+      },
+      "bakuretsuosakanakobo.playback": {
+        "type": "Project",
+        "dependencies": {
+          "LibVLCSharp": "[3.10.0, )"
+        }
       }
     }
   }

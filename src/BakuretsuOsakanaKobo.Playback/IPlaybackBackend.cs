@@ -14,7 +14,7 @@ public interface IPlaybackBackend : IDisposable
 
     string? CurrentPath { get; }
 
-    bool OpenAndPlay(string path);
+    Task<bool> OpenAndPlayAsync(string path, CancellationToken cancellationToken = default);
 
     void Play();
 

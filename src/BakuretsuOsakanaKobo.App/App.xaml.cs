@@ -3,6 +3,7 @@ using System.Windows.Threading;
 using BakuretsuOsakanaKobo.Infrastructure.Diagnostics;
 using BakuretsuOsakanaKobo.Infrastructure.Errors;
 using BakuretsuOsakanaKobo.Infrastructure.Persistence;
+using BakuretsuOsakanaKobo.Playback;
 
 namespace BakuretsuOsakanaKobo;
 
@@ -22,7 +23,24 @@ public partial class App : Application
         var window = new MainWindow();
         MainWindow = window;
         _errorReporter = new ErrorReporter(_diagnosticLog, new MainWindowNotificationSink(window));
-        window.ConfigureServices(paths, _errorReporter);
+        IPlaybackBackend? playbackBackend = null;
+        try
+        {
+            playbackBackend = new LibVlcPlaybackBackend(ReportPlaybackCallbackException);
+        }
+        catch (Exception exception)
+        {
+            _errorReporter.Report(
+                new UserNotification(
+                    UserNotificationSeverity.Error,
+                    "動画再生機能を初期化できませんでした。",
+                    "アプリを再起動し、改善しない場合は配置ファイルを確認してください。"),
+                "playback-initialization-failed",
+                exception.Message,
+                exception);
+        }
+
+        window.ConfigureServices(paths, _errorReporter, playbackBackend);
         RegisterGlobalErrorHandlers();
         window.Show();
 
@@ -170,5 +188,14 @@ public partial class App : Application
             e.Exception.Message,
             e.Exception));
         e.SetObserved();
+    }
+
+    private void ReportPlaybackCallbackException(Exception exception)
+    {
+        _diagnosticLog?.Write(new DiagnosticEvent(
+            DiagnosticSeverity.Error,
+            "playback-callback-failed",
+            exception.Message,
+            exception));
     }
 }

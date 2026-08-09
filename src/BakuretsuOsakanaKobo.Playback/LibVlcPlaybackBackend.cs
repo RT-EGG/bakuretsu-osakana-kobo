@@ -65,10 +65,11 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
 
     public string? CurrentPath { get; private set; }
 
-    public bool OpenAndPlay(string path)
+    public async Task<bool> OpenAndPlayAsync(string path, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        cancellationToken.ThrowIfCancellationRequested();
 
         string fullPath;
         try
@@ -87,14 +88,51 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
             return false;
         }
 
-        if (!File.Exists(fullPath))
+        if (!SupportedMediaPolicy.SupportsExtension(fullPath))
+        {
+            RaisePolicyError(SupportedMediaPolicy.Validate(fullPath, null, null), fullPath);
+            return false;
+        }
+
+        try
+        {
+            using var stream = new FileStream(
+                fullPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+        }
+        catch (IOException exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
         {
             RaiseError(new PlaybackErrorEventArgs(
                 "playback-file-missing",
                 "動画ファイルが見つかりません。",
                 "ファイルの場所を確認して、もう一度開いてください。",
-                "The requested media file does not exist.",
+                exception.Message,
+                exception,
                 targetPath: fullPath));
+            return false;
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            RaiseError(new PlaybackErrorEventArgs(
+                "playback-file-access-denied",
+                "動画ファイルを読み取る権限がありません。",
+                "ファイルのアクセス権限を確認してください。",
+                exception.Message,
+                exception,
+                fullPath));
+            return false;
+        }
+        catch (IOException exception)
+        {
+            RaiseError(new PlaybackErrorEventArgs(
+                "playback-file-unreadable",
+                "動画ファイルを読み取れませんでした。",
+                "ファイルが使用中でないか、状態を確認してください。",
+                exception.Message,
+                exception,
+                fullPath));
             return false;
         }
 
@@ -102,6 +140,51 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         try
         {
             nextMedia = new Media(_libVlc, new Uri(fullPath));
+            var parseStatus = await nextMedia.Parse(
+                MediaParseOptions.ParseLocal,
+                5_000,
+                cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (parseStatus != MediaParsedStatus.Done)
+            {
+                RaiseError(new PlaybackErrorEventArgs(
+                    "playback-parse-failed",
+                    "動画ファイルを解析できませんでした。",
+                    "ファイルが破損していないか確認してください。",
+                    $"LibVLC media parse status was {parseStatus}.",
+                    targetPath: fullPath));
+                return false;
+            }
+
+            var videoCodec = nextMedia.Tracks
+                .FirstOrDefault(track => track.TrackType == TrackType.Video)
+                .Codec;
+            var audioCodec = nextMedia.Tracks
+                .FirstOrDefault(track => track.TrackType == TrackType.Audio)
+                .Codec;
+            var mediaPolicy = SupportedMediaPolicy.Validate(
+                fullPath,
+                FourCc(videoCodec),
+                FourCc(audioCodec));
+            if (!mediaPolicy.IsAccepted)
+            {
+                RaisePolicyError(mediaPolicy, fullPath);
+                return false;
+            }
+
+            if (!await CanStartInStagingPlayerAsync(fullPath, cancellationToken).ConfigureAwait(false))
+            {
+                RaiseError(new PlaybackErrorEventArgs(
+                    "playback-staging-failed",
+                    "動画の再生準備を完了できませんでした。",
+                    "ファイルが破損していないか確認してください。",
+                    "The muted staging MediaPlayer did not enter the playing state.",
+                    targetPath: fullPath));
+                return false;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
             if (!MediaPlayer.Play(nextMedia))
             {
                 RaiseError(new PlaybackErrorEventArgs(
@@ -120,6 +203,10 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
             DisposeResource(previousMedia);
             return true;
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception exception)
         {
             RaiseError(new PlaybackErrorEventArgs(
@@ -133,7 +220,22 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         }
         finally
         {
-            nextMedia?.Dispose();
+            if (nextMedia is not null)
+            {
+                try
+                {
+                    nextMedia.ParseStop();
+                }
+                catch (Exception exception)
+                {
+                    ReportCallbackException(exception);
+                }
+
+                // Parse() completes from a native notification. Keep rejected media alive until
+                // the notification has fully unwound before releasing its native handle.
+                await Task.Delay(150, CancellationToken.None).ConfigureAwait(false);
+                DisposeResource(nextMedia);
+            }
         }
     }
 
@@ -219,6 +321,87 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
             targetPath: CurrentPath));
 
     private void RaiseError(PlaybackErrorEventArgs eventArgs) => RaiseSafely(ErrorOccurred, eventArgs);
+
+    private async Task<bool> CanStartInStagingPlayerAsync(string path, CancellationToken cancellationToken)
+    {
+        Media? stagingMedia = null;
+        MediaPlayer? stagingPlayer = null;
+
+        try
+        {
+            stagingMedia = new Media(_libVlc, new Uri(path));
+            stagingMedia.AddOption(":aout=dummy");
+            stagingMedia.AddOption(":vout=dummy");
+            stagingPlayer = new MediaPlayer(_libVlc)
+            {
+                Mute = true,
+            };
+
+            if (!stagingPlayer.Play(stagingMedia))
+            {
+                return false;
+            }
+
+            var deadline = DateTime.UtcNow.AddMilliseconds(1_500);
+            while (!stagingPlayer.IsPlaying && DateTime.UtcNow < deadline)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (stagingPlayer.State is VLCState.Error or VLCState.Ended or VLCState.Stopped)
+                {
+                    return false;
+                }
+
+                await Task.Delay(25, cancellationToken).ConfigureAwait(false);
+            }
+
+            return stagingPlayer.IsPlaying;
+        }
+        finally
+        {
+            if (stagingPlayer is not null)
+            {
+                try
+                {
+                    stagingPlayer.Stop();
+                }
+                catch (Exception exception)
+                {
+                    ReportCallbackException(exception);
+                }
+
+                // Stop() can return while LibVLC is still unwinding decoder work on another thread.
+                // Keep the staging objects alive briefly before releasing their native handles.
+                await Task.Delay(150, CancellationToken.None).ConfigureAwait(false);
+            }
+
+            DisposeResource(stagingMedia);
+            DisposeResource(stagingPlayer);
+        }
+    }
+
+    private void RaisePolicyError(MediaPolicyResult result, string targetPath) =>
+        RaiseError(new PlaybackErrorEventArgs(
+            result.EventCode!,
+            result.UserMessage!,
+            result.SuggestedAction!,
+            result.TechnicalMessage!,
+            targetPath: targetPath));
+
+    private static string? FourCc(uint value)
+    {
+        if (value == 0)
+        {
+            return null;
+        }
+
+        Span<char> characters = stackalloc char[4];
+        for (var index = 0; index < characters.Length; index++)
+        {
+            characters[index] = (char)((value >> (index * 8)) & 0xff);
+        }
+
+        return new string(characters).TrimEnd('\0');
+    }
 
     private void RaiseSafely(EventHandler? handlers, EventArgs eventArgs)
     {

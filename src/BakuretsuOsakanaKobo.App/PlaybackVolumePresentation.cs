@@ -18,7 +18,7 @@ public readonly record struct PlaybackVolumePresentation(
         bool isMuted)
     {
         var isEnabled = hasMedia && !isLoading && !hasPlaybackError;
-        var clampedVolume = PlaybackVolume.ClampBasic(volumePercent);
+        var clampedVolume = PlaybackVolume.Clamp(volumePercent);
         var disabledMuteToolTip = !hasMedia
             ? "動画を開くとミュートを変更できます"
             : isLoading
@@ -37,6 +37,6 @@ public readonly record struct PlaybackVolumePresentation(
                 ? isMuted ? "ミュート解除" : "ミュート"
                 : disabledMuteToolTip,
             isMuted ? "ミュート解除" : "ミュート",
-            isEnabled ? "音量 0～100%" : disabledVolumeToolTip);
+            isEnabled ? "音量 0～500%" : disabledVolumeToolTip);
     }
 }

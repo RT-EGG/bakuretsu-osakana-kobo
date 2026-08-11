@@ -28,7 +28,8 @@ public sealed class PlaybackVolumePresentationTests
     [Theory]
     [InlineData(-1, 0)]
     [InlineData(65, 65)]
-    [InlineData(101, 100)]
+    [InlineData(350, 350)]
+    [InlineData(501, 500)]
     public void From_WithMedia_EnablesAndClampsDisplayedVolume(int volumePercent, int expected)
     {
         var presentation = PlaybackVolumePresentation.From(

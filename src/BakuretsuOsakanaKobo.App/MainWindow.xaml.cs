@@ -288,7 +288,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (eventArgs.EventCode == "playback-native-error")
+        if (eventArgs.EventCode is "playback-native-error" or "playback-audio-output-error")
         {
             _hasPlaybackError = true;
             UpdateVolumeControls();

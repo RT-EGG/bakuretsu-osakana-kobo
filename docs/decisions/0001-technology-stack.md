@@ -2,7 +2,7 @@
 
 - 状態: Accepted
 - 作成日: 2026-07-27
-- 最終更新日: 2026-08-05
+- 最終更新日: 2026-08-11
 - 暫定候補承認日: 2026-07-28
 - 最終承認日: 2026-08-05
 - 決定者: 開発者
@@ -26,7 +26,7 @@ Phase 2最終レビューにより、次の構成を採用する。
 | UI | WPF、Per-Monitor V2 DPI aware |
 | 再生 | `LibVLCSharp` / `LibVLCSharp.WPF` 3.10.0 |
 | ネイティブ再生資産 | `VideoLAN.LibVLC.Windows` 3.0.23.1のx64資産。ただしGPL-onlyプラグイン4件を除外し、残り319件を発行ごとに監査 |
-| 100%超の音声 | LibVLC `S16N` PCMコールバック、自作先読みリミッター、`NAudio.Core` / `NAudio.Wasapi` 2.3.0 |
+| 0～500%の音声 | LibVLC `S16N` PCMコールバック、自作先読みリミッター、`NAudio.Core` / `NAudio.Wasapi` 2.3.0。単一出力経路とし、100%以下は線形音量、100%超だけ-1 dBFS制限を適用 |
 | 永続化 | `System.Text.Json`によるバージョン付きJSON、同一ディレクトリ一時ファイルからの原子的置換 |
 | 単一起動 | Named Mutex + current-user-only Named Pipe |
 | 配布 | `win-x64` framework-dependent folderをZIP化。利用者が.NET 10 Desktop Runtime x64を事前導入 |
@@ -80,7 +80,7 @@ UI・再生・配布要件を満たしたため、Windows App SDKと追加メデ
 
 - 4K WMVは性能保証外。HEVC、VP9、VFRは保証外のベストエフォートである。
 - 速度切替直後には約100～1,000 msの短い音飛びがあり、シームレス切替を保証しない。
-- 100%超音量は自作DSPとWASAPI経路を製品実装し、OS音量ガード、停止手段、回帰試験を維持する。
+- 0～500%音量は単一の自作DSP/WASAPI製品経路とし、OS音量ガード、停止手段、回帰試験を維持する。
 - 4Kサムネイル生成はCPU負荷が高いため、逐次・低優先度・キャンセル可能なワーカーとする。
 - WPF Popupの最終的な上下間隔とマウス透過はPhase 3/4で調整する。
 - 初回リリースでは最低CPU・GPU・メモリを定義しない。基準PCは検証済み環境であり、他環境はベストエフォートとする。

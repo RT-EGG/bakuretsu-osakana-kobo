@@ -106,7 +106,8 @@ $requiredFiles = @(
     'CORRESPONDING-SOURCE.md',
     'docs\supported-media-formats.md',
     'dotnet-packages.json',
-    'licenses\LGPL-2.1.txt'
+    'licenses\LGPL-2.1.txt',
+    'licenses\NAudio-MIT.txt'
 )
 foreach ($relativePath in $requiredFiles) {
     $requiredPath = Join-Path $extractDirectory $relativePath

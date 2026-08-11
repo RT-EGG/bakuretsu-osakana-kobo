@@ -72,6 +72,19 @@ public sealed class StreamingLookaheadLimiterTests
         Assert.Throws<ArgumentOutOfRangeException>(() => CreateLimiter(double.NaN));
     }
 
+    [Fact]
+    public void UpdateParameters_AppliesNewLevelToPendingLookahead()
+    {
+        var limiter = CreateLimiter(boost: 1);
+        var pendingOnly = CreateConstantFrames(frameCount: 120, left: 0.1f, right: -0.1f);
+        Assert.Empty(limiter.Process(pendingOnly));
+
+        limiter.UpdateParameters(boost: 2, ceiling: 1);
+        var output = limiter.Flush();
+
+        Assert.All(output, sample => Assert.InRange(Math.Abs(sample), 0.1999f, 0.2001f));
+    }
+
     private static StreamingLookaheadLimiter CreateLimiter(double boost) =>
         new(
             Channels,

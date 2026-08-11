@@ -6,6 +6,7 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
 {
     private readonly LibVLC _libVlc;
     private readonly Action<Exception>? _callbackExceptionHandler;
+    private readonly RealtimeAudioOutput _audioOutput;
     private Media? _currentMedia;
     private int _volumePercent = PlaybackVolume.DefaultPercent;
     private bool _isMuted;
@@ -17,11 +18,15 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         Core.Initialize();
         _libVlc = new LibVLC(enableDebugLogs: false);
         MediaPlayer? mediaPlayer = null;
+        RealtimeAudioOutput? audioOutput = null;
 
         try
         {
             mediaPlayer = new MediaPlayer(_libVlc);
             MediaPlayer = mediaPlayer;
+            audioOutput = new RealtimeAudioOutput(OnAudioOutputFailure);
+            audioOutput.AttachTo(MediaPlayer);
+            _audioOutput = audioOutput;
             MediaPlayer.Volume = PlaybackVolume.DefaultPercent;
             MediaPlayer.Mute = false;
             SubscribePlayerEvents();
@@ -29,6 +34,7 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         catch
         {
             mediaPlayer?.Dispose();
+            audioOutput?.Dispose();
             _libVlc.Dispose();
             throw;
         }
@@ -95,6 +101,8 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
     }
 
     public string? CurrentPath { get; private set; }
+
+    internal RealtimeAudioDiagnostics AudioDiagnostics => _audioOutput.Diagnostics;
 
     public async Task<bool> OpenAndPlayAsync(string path, CancellationToken cancellationToken = default)
     {
@@ -219,6 +227,7 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
             }
 
             cancellationToken.ThrowIfCancellationRequested();
+            _audioOutput.PrepareForPlayback();
             if (!MediaPlayer.Play(nextMedia))
             {
                 RaiseError(new PlaybackErrorEventArgs(
@@ -278,6 +287,7 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
     public void Play()
     {
         ThrowIfDisposed();
+        _audioOutput.PrepareForPlayback();
         MediaPlayer.Play();
     }
 
@@ -302,21 +312,21 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
     public void SetVolumePercent(int volumePercent)
     {
         ThrowIfDisposed();
-        _volumePercent = PlaybackVolume.ClampBasic(volumePercent);
-        MediaPlayer.Volume = _volumePercent;
+        _volumePercent = PlaybackVolume.Clamp(volumePercent);
+        _audioOutput.SetVolumePercent(_volumePercent);
     }
 
     public void SetMuted(bool isMuted)
     {
         ThrowIfDisposed();
         _isMuted = isMuted;
-        MediaPlayer.Mute = isMuted;
+        _audioOutput.SetMuted(isMuted);
     }
 
     private void ApplyVolumeState()
     {
-        MediaPlayer.Volume = _volumePercent;
-        MediaPlayer.Mute = _isMuted;
+        _audioOutput.SetVolumePercent(_volumePercent);
+        _audioOutput.SetMuted(_isMuted);
     }
 
     public void Dispose()
@@ -341,6 +351,7 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         DisposeResource(_currentMedia);
         _currentMedia = null;
         DisposeResource(MediaPlayer);
+        _audioOutput.Dispose();
         DisposeResource(_libVlc);
     }
 
@@ -371,6 +382,15 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
             "別の動画を開くか、ファイルの状態を確認してください。",
             "LibVLC raised the MediaPlayer.EncounteredError event.",
             targetPath: CurrentPath));
+
+    private void OnAudioOutputFailure(Exception exception) =>
+        RaiseError(new PlaybackErrorEventArgs(
+            "playback-audio-output-error",
+            "音声の再生中に問題が発生しました。",
+            "Windowsの音声出力を確認して、アプリを再起動してください。",
+            exception.Message,
+            exception,
+            CurrentPath));
 
     private void RaiseError(PlaybackErrorEventArgs eventArgs) => RaiseSafely(ErrorOccurred, eventArgs);
 

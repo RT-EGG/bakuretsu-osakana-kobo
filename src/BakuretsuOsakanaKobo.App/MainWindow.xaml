@@ -127,7 +127,7 @@
                         Height="22"
                         VerticalAlignment="Center"
                         Minimum="0"
-                        Maximum="100"
+                        Maximum="500"
                         Value="100"
                         SmallChange="1"
                         LargeChange="5"

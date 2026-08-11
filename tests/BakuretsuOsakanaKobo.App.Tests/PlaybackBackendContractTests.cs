@@ -33,19 +33,23 @@ public sealed class PlaybackBackendContractTests
         backend.Dispose();
         backend.Dispose();
 
+        Assert.False(backend.AudioDiagnostics.RenderThreadAlive);
         Assert.Throws<ObjectDisposedException>(() => _ = backend.IsPlaying);
     }
 
     [Fact]
-    public void LibVlcBackendClampsBasicVolumeAndKeepsMuteIndependent()
+    public void LibVlcBackendClampsProductVolumeAndKeepsMuteIndependent()
     {
         using var backend = new LibVlcPlaybackBackend();
 
         Assert.Equal(PlaybackVolume.DefaultPercent, backend.VolumePercent);
         Assert.False(backend.IsMuted);
 
-        backend.SetVolumePercent(101);
-        Assert.Equal(PlaybackVolume.BasicMaximumPercent, backend.VolumePercent);
+        backend.SetVolumePercent(350);
+        Assert.Equal(350, backend.VolumePercent);
+
+        backend.SetVolumePercent(501);
+        Assert.Equal(PlaybackVolume.MaximumPercent, backend.VolumePercent);
 
         backend.SetMuted(true);
         backend.SetVolumePercent(-1);
@@ -144,7 +148,7 @@ public sealed class PlaybackBackendContractTests
         }
 
         public void SetVolumePercent(int volumePercent) =>
-            VolumePercent = PlaybackVolume.ClampBasic(volumePercent);
+            VolumePercent = PlaybackVolume.Clamp(volumePercent);
 
         public void SetMuted(bool isMuted) => IsMuted = isMuted;
 

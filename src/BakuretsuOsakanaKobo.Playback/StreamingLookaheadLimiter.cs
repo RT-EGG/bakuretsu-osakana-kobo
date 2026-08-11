@@ -3,8 +3,8 @@ namespace BakuretsuOsakanaKobo.Playback;
 internal sealed class StreamingLookaheadLimiter
 {
     private readonly int _channels;
-    private readonly double _boost;
-    private readonly double _ceiling;
+    private double _boost;
+    private double _ceiling;
     private readonly double _releaseCoefficient;
     private readonly int _lookaheadFrames;
     private readonly float[] _pending;
@@ -72,6 +72,23 @@ internal sealed class StreamingLookaheadLimiter
 
     public double MinimumAppliedGain { get; private set; } = 1;
 
+    public void UpdateParameters(double boost, double ceiling)
+    {
+        ThrowIfNotFinite(boost);
+        ThrowIfNotFinite(ceiling);
+        ArgumentOutOfRangeException.ThrowIfNegative(boost);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(ceiling, 0);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(ceiling, 1);
+
+        if (boost <= _boost || ceiling > _ceiling)
+        {
+            _smoothedGain = 1;
+        }
+
+        _boost = boost;
+        _ceiling = ceiling;
+    }
+
     public float[] Process(float[] input)
     {
         ArgumentNullException.ThrowIfNull(input);
@@ -137,9 +154,8 @@ internal sealed class StreamingLookaheadLimiter
                 inputValue = 0;
             }
 
-            var value = (float)(inputValue * _boost);
-            _pending[(slot * _channels) + channel] = value;
-            peak = Math.Max(peak, Math.Abs((double)value));
+            _pending[(slot * _channels) + channel] = inputValue;
+            peak = Math.Max(peak, Math.Abs((double)inputValue));
         }
 
         _pendingIndices[slot] = index;
@@ -166,7 +182,7 @@ internal sealed class StreamingLookaheadLimiter
     {
         var capacity = _pendingIndices.Length;
         var index = _pendingIndices[_pendingHead];
-        var lookaheadPeak = _peakValues[_peakHead];
+        var lookaheadPeak = _peakValues[_peakHead] * _boost;
         var requiredGain = lookaheadPeak > _ceiling ? _ceiling / lookaheadPeak : 1;
         _smoothedGain = requiredGain < _smoothedGain
             ? requiredGain
@@ -175,7 +191,7 @@ internal sealed class StreamingLookaheadLimiter
 
         for (var channel = 0; channel < _channels; channel++)
         {
-            var value = _pending[(_pendingHead * _channels) + channel] * _smoothedGain;
+            var value = _pending[(_pendingHead * _channels) + channel] * _boost * _smoothedGain;
             value = Math.Clamp(value, -_ceiling, _ceiling);
             if (!double.IsFinite(value))
             {

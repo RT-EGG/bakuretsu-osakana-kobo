@@ -10,6 +10,7 @@ using BakuretsuOsakanaKobo.Infrastructure.Errors;
 using BakuretsuOsakanaKobo.Infrastructure.Persistence;
 using BakuretsuOsakanaKobo.Playback;
 using LibVLCSharp.Shared;
+using NAudio.CoreAudioApi;
 
 namespace BakuretsuOsakanaKobo.ReleaseValidation;
 
@@ -51,8 +52,27 @@ internal static class Program
                 var volumeText = (TextBlock)window.FindName("VolumeText");
                 var videoSurface = (UIElement)window.FindName("VideoSurface");
                 Ensure(!volumeSlider.IsEnabled && !muteButton.IsEnabled, "Volume controls must start disabled.");
-                var openMilliseconds = await MeasureOpenAsync(window, seekSlider, backend, args[0]);
+                var openMetrics = await MeasureOpenAsync(window, seekSlider, backend, args[0]);
                 var lengthMilliseconds = backend.LengthMilliseconds;
+                if (Environment.GetEnvironmentVariable("BOK_AUDIO_DRAIN_VALIDATION") == "1")
+                {
+                    var drainDiagnostics = await ValidateNaturalDrainAsync(backend);
+                    var drainReport = new
+                    {
+                        success = true,
+                        video = Path.GetFullPath(args[0]),
+                        muted = backend.IsMuted,
+                        processStartToWindowLoadedMs = windowLoadedMilliseconds,
+                        openToTimelineReadyMs = openMetrics.TimelineReadyMilliseconds,
+                        openToAudioOutputReadyMs = openMetrics.AudioOutputReadyMilliseconds,
+                        lengthMilliseconds,
+                        audioDiagnostics = drainDiagnostics,
+                    };
+                    WriteReport(args[1], drainReport);
+                    Console.WriteLine(JsonSerializer.Serialize(drainReport));
+                    exitCode = 0;
+                    return;
+                }
 
                 var seek50Milliseconds = await MeasureSeekAsync(
                     seekSlider,
@@ -71,18 +91,24 @@ internal static class Program
                     volumeText,
                     videoSurface,
                     backend);
+                var audibleValidation = Environment.GetEnvironmentVariable("BOK_AUDIBLE_VOLUME_VALIDATION") == "1"
+                    ? await ValidateAudibleVolumeAsync(backend)
+                    : null;
 
                 var report = new
                 {
                     success = true,
                     video = Path.GetFullPath(args[0]),
-                    muted = backend.MediaPlayer.Mute,
+                    muted = backend.IsMuted,
                     processStartToWindowLoadedMs = windowLoadedMilliseconds,
-                    openToTimelineReadyMs = openMilliseconds,
+                    openToTimelineReadyMs = openMetrics.TimelineReadyMilliseconds,
+                    openToAudioOutputReadyMs = openMetrics.AudioOutputReadyMilliseconds,
                     seek50PercentMs = seek50Milliseconds,
                     seek90PercentMs = seek90Milliseconds,
                     lengthMilliseconds,
                     volumeValidation,
+                    audibleValidation,
+                    audioDiagnostics = backend.AudioDiagnostics,
                 };
                 WriteReport(args[1], report);
                 Console.WriteLine(JsonSerializer.Serialize(report));
@@ -99,7 +125,81 @@ internal static class Program
         };
 
         application.Run(window);
+        var shutdownDiagnostics = backend.AudioDiagnostics;
+        if (shutdownDiagnostics.RenderThreadAlive || shutdownDiagnostics.Failed)
+        {
+            Console.Error.WriteLine(
+                $"Audio shutdown failed: threadAlive={shutdownDiagnostics.RenderThreadAlive}, failed={shutdownDiagnostics.Failed}.");
+            return 1;
+        }
+
         return exitCode;
+    }
+
+    private static async Task<RealtimeAudioDiagnostics> ValidateNaturalDrainAsync(
+        LibVlcPlaybackBackend backend)
+    {
+        await WaitUntilAsync(
+            () => backend.AudioDiagnostics is { CompletedDrainCount: > 0, PendingLimiterFrames: 0, Failed: false },
+            TimeSpan.FromSeconds(10),
+            "The product PCM/WASAPI path did not drain after natural playback completion.");
+        var diagnostics = backend.AudioDiagnostics;
+        Ensure(diagnostics.UnderrunCount == 0, "Natural drain reported a PCM underrun.");
+        Ensure(diagnostics.OverflowCount == 0, "Natural drain reported a PCM overflow.");
+        Ensure(diagnostics.NonFiniteInputSamples == 0, "Natural drain received non-finite PCM input.");
+        Ensure(diagnostics.NonFiniteOutputSamples == 0, "Natural drain produced non-finite PCM output.");
+        Ensure(diagnostics.OverRangeSamples == 0, "Natural drain produced an out-of-range PCM sample.");
+        Ensure(
+            diagnostics.InputFrames == diagnostics.BufferedFrames + diagnostics.DiscardedLimiterFrames,
+            "Natural drain did not account for every input frame.");
+        var flushedFrames = diagnostics.FlushedBytes /
+            (sizeof(float) * RealtimeVolumeProcessor.Channels);
+        Ensure(
+            diagnostics.BufferedFrames == diagnostics.ConsumedFrames + flushedFrames,
+            $"Natural drain did not account for every buffered frame: buffered={diagnostics.BufferedFrames}, consumed={diagnostics.ConsumedFrames}, flushed={flushedFrames}.");
+        return diagnostics;
+    }
+
+    private static async Task<object> ValidateAudibleVolumeAsync(LibVlcPlaybackBackend backend)
+    {
+        using var enumerator = new MMDeviceEnumerator();
+        using var endpoint = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+        var endpointVolume = endpoint.AudioEndpointVolume.MasterVolumeLevelScalar;
+        var endpointMuted = endpoint.AudioEndpointVolume.Mute;
+        Ensure(!endpointMuted, "Audible validation requires the default endpoint to be unmuted.");
+        Ensure(
+            endpointVolume <= 0.5 + 0.000001,
+            $"Audible validation requires endpoint volume at 50% or lower; current value is {endpointVolume:P1}.");
+
+        backend.SetVolumePercent(PlaybackVolume.MaximumPercent);
+        try
+        {
+            backend.SetMuted(false);
+            backend.Play();
+            await Task.Delay(TimeSpan.FromSeconds(3));
+        }
+        finally
+        {
+            backend.SetMuted(true);
+            backend.Pause();
+        }
+
+        var diagnostics = backend.AudioDiagnostics;
+        var ceiling = Math.Pow(10, RealtimeVolumeProcessor.BoostedCeilingDecibels / 20);
+        Ensure(!diagnostics.Failed, "The audible PCM/WASAPI path reported a failure.");
+        Ensure(diagnostics.OverRangeSamples == 0, "The audible PCM/WASAPI path exceeded full scale.");
+        Ensure(diagnostics.Peak <= ceiling + 0.000001, "The audible PCM/WASAPI path exceeded the -1 dBFS ceiling.");
+
+        return new
+        {
+            durationSeconds = 3,
+            volumePercent = PlaybackVolume.MaximumPercent,
+            endpointVolumePercent = endpointVolume * 100,
+            peak = diagnostics.Peak,
+            ceiling,
+            diagnostics.OverRangeSamples,
+            finalMuted = backend.IsMuted,
+        };
     }
 
     private static object ValidateVolumeControls(
@@ -122,34 +222,34 @@ internal static class Program
         muteButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         Ensure(backend.IsMuted, "The mute button did not restore mute.");
 
-        volumeSlider.Value = 95;
+        volumeSlider.Value = 495;
         var wheelUp = new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, 120)
         {
             RoutedEvent = UIElement.PreviewMouseWheelEvent,
         };
         videoSurface.RaiseEvent(wheelUp);
-        Ensure(wheelUp.Handled && backend.VolumePercent == 100, "Wheel-up did not reach 100%.");
+        Ensure(wheelUp.Handled && backend.VolumePercent == 500, "Wheel-up did not reach 500%.");
 
         var wheelAboveMaximum = new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, 120)
         {
             RoutedEvent = UIElement.PreviewMouseWheelEvent,
         };
         videoSurface.RaiseEvent(wheelAboveMaximum);
-        Ensure(backend.VolumePercent == 100, "Wheel-up exceeded the 100% basic limit.");
+        Ensure(backend.VolumePercent == 500, "Wheel-up exceeded the 500% product limit.");
 
         var wheelDown = new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, -120)
         {
             RoutedEvent = UIElement.PreviewMouseWheelEvent,
         };
         videoSurface.RaiseEvent(wheelDown);
-        Ensure(wheelDown.Handled && backend.VolumePercent == 95, "Wheel-down did not reduce volume by 5%.");
+        Ensure(wheelDown.Handled && backend.VolumePercent == 495, "Wheel-down did not reduce volume by 5%.");
 
         return new
         {
             sliderPercent = 65,
             muteToggle = true,
             wheelStepPercent = PlaybackVolume.WheelStepPercent,
-            maximumPercent = PlaybackVolume.BasicMaximumPercent,
+            maximumPercent = PlaybackVolume.MaximumPercent,
             finalPercent = backend.VolumePercent,
             finalMuted = backend.IsMuted,
         };
@@ -163,7 +263,7 @@ internal static class Program
         }
     }
 
-    private static async Task<double> MeasureOpenAsync(
+    private static async Task<OpenMetrics> MeasureOpenAsync(
         MainWindow window,
         Slider seekSlider,
         LibVlcPlaybackBackend backend,
@@ -194,7 +294,12 @@ internal static class Program
                 () => seekSlider.IsEnabled && backend.LengthMilliseconds > 0,
                 TimeSpan.FromSeconds(5),
                 "The product timeline did not become ready.");
-            return ready.Max();
+            var timelineReadyMilliseconds = ready.Max();
+            await WaitUntilAsync(
+                () => backend.AudioDiagnostics is { CallbackCount: > 0, OutputStarted: true, Failed: false },
+                TimeSpan.FromSeconds(5),
+                "The product PCM/WASAPI path did not become ready.");
+            return new OpenMetrics(timelineReadyMilliseconds, clock.Elapsed.TotalMilliseconds);
         }
         finally
         {
@@ -257,6 +362,10 @@ internal static class Program
         {
         }
     }
+
+    private readonly record struct OpenMetrics(
+        double TimelineReadyMilliseconds,
+        double AudioOutputReadyMilliseconds);
 
     private sealed class NullNotificationSink : IUserNotificationSink
     {

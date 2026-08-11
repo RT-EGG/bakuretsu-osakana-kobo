@@ -26,6 +26,18 @@ internal static class Program
         }
 
         var processClock = Stopwatch.StartNew();
+        var validateProfiles = Environment.GetEnvironmentVariable("BOK_VIDEO_PROFILE_VALIDATION") == "1";
+        var profileFilePath = $"{Path.GetFullPath(args[1])}.video-profiles.json";
+        VideoProfileRepository? videoProfiles = null;
+        if (validateProfiles)
+        {
+            videoProfiles = new VideoProfileRepository(profileFilePath);
+            videoProfiles.LoadAsync().GetAwaiter().GetResult();
+            videoProfiles.Set(args[0], 275, isMuted: true);
+            var initialSave = videoProfiles.SaveAsync().GetAwaiter().GetResult();
+            Ensure(initialSave.Success, initialSave.ErrorMessage ?? "Initial video profile save failed.");
+        }
+
         var application = new Application();
         AddProductResources(application.Resources);
         var window = new MainWindow
@@ -35,12 +47,15 @@ internal static class Program
         };
         var backend = new LibVlcPlaybackBackend();
         backend.SetMuted(true);
+        var notificationSink = new RecordingNotificationSink();
         window.ConfigureServices(
             new PortableDataPaths(AppContext.BaseDirectory),
-            new ErrorReporter(new NullDiagnosticLog(), new NullNotificationSink()),
-            backend);
+            new ErrorReporter(new NullDiagnosticLog(), notificationSink),
+            backend,
+            videoProfiles);
 
         var exitCode = 1;
+        ProfileDelayValidation? profileDelayValidation = null;
         window.Loaded += async (_, _) =>
         {
             var windowLoadedMilliseconds = processClock.Elapsed.TotalMilliseconds;
@@ -54,6 +69,17 @@ internal static class Program
                 Ensure(!volumeSlider.IsEnabled && !muteButton.IsEnabled, "Volume controls must start disabled.");
                 var openMetrics = await MeasureOpenAsync(window, seekSlider, backend, args[0]);
                 var lengthMilliseconds = backend.LengthMilliseconds;
+                if (validateProfiles)
+                {
+                    profileDelayValidation = await ValidateVideoProfilesAsync(
+                        volumeSlider,
+                        backend,
+                        profileFilePath,
+                        notificationSink);
+                    exitCode = 0;
+                    return;
+                }
+
                 if (Environment.GetEnvironmentVariable("BOK_AUDIO_DRAIN_VALIDATION") == "1")
                 {
                     var drainDiagnostics = await ValidateNaturalDrainAsync(backend);
@@ -133,7 +159,81 @@ internal static class Program
             return 1;
         }
 
+        if (validateProfiles && exitCode == 0)
+        {
+            using var verifier = new VideoProfileRepository(profileFilePath);
+            var loaded = verifier.LoadAsync().GetAwaiter().GetResult();
+            Ensure(loaded.Warning is null, loaded.Warning ?? "Final video profile load failed.");
+            Ensure(verifier.TryGet(args[0], out var finalProfile), "Final video profile was not saved.");
+            Ensure(finalProfile.VolumePercent == 180, "Normal-close profile save did not persist 180%.");
+            Ensure(finalProfile.IsMuted, "Normal-close profile save did not preserve mute.");
+            var report = new
+            {
+                success = true,
+                video = Path.GetFullPath(args[0]),
+                profileFilePath,
+                saveDelaySeconds = MainWindow.VideoProfileSaveDelay.TotalSeconds,
+                delayedSave = profileDelayValidation,
+                normalClose = new
+                {
+                    volumePercent = finalProfile.VolumePercent,
+                    muted = finalProfile.IsMuted,
+                },
+                audioDiagnostics = shutdownDiagnostics,
+            };
+            WriteReport(args[1], report);
+            Console.WriteLine(JsonSerializer.Serialize(report));
+        }
+
         return exitCode;
+    }
+
+    private static async Task<ProfileDelayValidation> ValidateVideoProfilesAsync(
+        Slider volumeSlider,
+        LibVlcPlaybackBackend backend,
+        string profileFilePath,
+        RecordingNotificationSink notificationSink)
+    {
+        Ensure(backend.VolumePercent == 275, "Saved video volume was not restored before playback.");
+        Ensure(backend.IsMuted, "Saved mute state was not restored before playback.");
+
+        volumeSlider.Value = 320;
+        Ensure(backend.VolumePercent == 320, "Profile validation slider did not set 320%.");
+        await Task.Delay(MainWindow.VideoProfileSaveDelay + TimeSpan.FromMilliseconds(500));
+
+        using (var verifier = new VideoProfileRepository(profileFilePath))
+        {
+            var loaded = await verifier.LoadAsync();
+            Ensure(loaded.Warning is null, loaded.Warning ?? "Delayed video profile load failed.");
+            Ensure(verifier.TryGet(backend.CurrentPath!, out var delayedProfile), "Delayed video profile was not saved.");
+            Ensure(delayedProfile.VolumePercent == 320, "Delayed video profile did not persist 320%.");
+            Ensure(delayedProfile.IsMuted, "Delayed video profile did not preserve mute.");
+        }
+
+        var notificationCount = notificationSink.Notifications.Count;
+        await using (var lockedProfile = new FileStream(
+                         profileFilePath,
+                         FileMode.Open,
+                         FileAccess.Read,
+                         FileShare.Read))
+        {
+            volumeSlider.Value = 310;
+            await Task.Delay(MainWindow.VideoProfileSaveDelay + TimeSpan.FromMilliseconds(500));
+            Ensure(backend.IsPlaying, "Playback stopped after a video profile save failure.");
+            Ensure(backend.VolumePercent == 310, "Volume changed after a video profile save failure.");
+            Ensure(
+                notificationSink.Notifications.Count > notificationCount,
+                "A video profile save failure did not surface a warning.");
+        }
+
+        volumeSlider.Value = 180;
+        Ensure(backend.VolumePercent == 180, "Profile validation slider did not set 180% before close.");
+        return new ProfileDelayValidation(
+            RestoredVolumePercent: 275,
+            RestoredMuted: true,
+            SavedVolumePercent: 320,
+            SavedMuted: true,
+            WriteFailureKeptPlaying: true);
     }
 
     private static async Task<RealtimeAudioDiagnostics> ValidateNaturalDrainAsync(
@@ -367,10 +467,20 @@ internal static class Program
         double TimelineReadyMilliseconds,
         double AudioOutputReadyMilliseconds);
 
-    private sealed class NullNotificationSink : IUserNotificationSink
+    private readonly record struct ProfileDelayValidation(
+        int RestoredVolumePercent,
+        bool RestoredMuted,
+        int SavedVolumePercent,
+        bool SavedMuted,
+        bool WriteFailureKeptPlaying);
+
+    private sealed class RecordingNotificationSink : IUserNotificationSink
     {
+        public List<UserNotification> Notifications { get; } = [];
+
         public void Show(UserNotification notification)
         {
+            Notifications.Add(notification);
         }
     }
 }

@@ -20,7 +20,10 @@ public interface IPlaybackBackend : IDisposable
 
     string? CurrentPath { get; }
 
-    Task<bool> OpenAndPlayAsync(string path, CancellationToken cancellationToken = default);
+    Task<bool> OpenAndPlayAsync(
+        string path,
+        PlaybackAudioState? initialAudioState = null,
+        CancellationToken cancellationToken = default);
 
     void Play();
 

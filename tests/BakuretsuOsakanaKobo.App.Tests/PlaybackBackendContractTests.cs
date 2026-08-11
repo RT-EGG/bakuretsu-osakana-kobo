@@ -26,6 +26,19 @@ public sealed class PlaybackBackendContractTests
     }
 
     [Fact]
+    public async Task OpenAppliesInitialAudioStateAsPartOfTheSuccessfulTransition()
+    {
+        using IPlaybackBackend backend = new FakePlaybackBackend();
+
+        Assert.True(await backend.OpenAndPlayAsync(
+            "sample.mp4",
+            new PlaybackAudioState(350, isMuted: true)));
+
+        Assert.Equal(350, backend.VolumePercent);
+        Assert.True(backend.IsMuted);
+    }
+
+    [Fact]
     public void LibVlcBackendInitializesAndDisposesIdempotently()
     {
         var backend = new LibVlcPlaybackBackend();
@@ -99,7 +112,7 @@ public sealed class PlaybackBackendContractTests
         backend.ErrorOccurred += (_, _) => errorCount++;
 
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
-            backend.OpenAndPlayAsync("sample.mp4", cancellation.Token));
+            backend.OpenAndPlayAsync("sample.mp4", cancellationToken: cancellation.Token));
 
         Assert.Null(backend.CurrentPath);
         Assert.Equal(0, errorCount);
@@ -129,10 +142,19 @@ public sealed class PlaybackBackendContractTests
 
         public string? CurrentPath { get; private set; }
 
-        public Task<bool> OpenAndPlayAsync(string path, CancellationToken cancellationToken = default)
+        public Task<bool> OpenAndPlayAsync(
+            string path,
+            PlaybackAudioState? initialAudioState = null,
+            CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             CurrentPath = path;
             IsPlaying = true;
+            if (initialAudioState is { } audioState)
+            {
+                VolumePercent = audioState.VolumePercent;
+                IsMuted = audioState.IsMuted;
+            }
             StateChanged?.Invoke(this, EventArgs.Empty);
             return Task.FromResult(true);
         }

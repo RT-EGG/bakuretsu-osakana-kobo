@@ -104,7 +104,10 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
 
     internal RealtimeAudioDiagnostics AudioDiagnostics => _audioOutput.Diagnostics;
 
-    public async Task<bool> OpenAndPlayAsync(string path, CancellationToken cancellationToken = default)
+    public async Task<bool> OpenAndPlayAsync(
+        string path,
+        PlaybackAudioState? initialAudioState = null,
+        CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -176,6 +179,10 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         }
 
         Media? nextMedia = null;
+        var previousAudioState = new PlaybackAudioState(_volumePercent, _isMuted);
+        var nextAudioState = initialAudioState ?? previousAudioState;
+        var nextAudioStateApplied = false;
+        var nextAudioStateCommitted = false;
         try
         {
             nextMedia = new Media(_libVlc, new Uri(fullPath));
@@ -227,6 +234,10 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
             }
 
             cancellationToken.ThrowIfCancellationRequested();
+            _volumePercent = nextAudioState.VolumePercent;
+            _isMuted = nextAudioState.IsMuted;
+            nextAudioStateApplied = true;
+            ApplyVolumeState();
             _audioOutput.PrepareForPlayback();
             if (!MediaPlayer.Play(nextMedia))
             {
@@ -239,12 +250,11 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
                 return false;
             }
 
-            ApplyVolumeState();
-
             var previousMedia = _currentMedia;
             _currentMedia = nextMedia;
             nextMedia = null;
             CurrentPath = fullPath;
+            nextAudioStateCommitted = true;
             DisposeResource(previousMedia);
             return true;
         }
@@ -265,6 +275,13 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         }
         finally
         {
+            if (nextAudioStateApplied && !nextAudioStateCommitted)
+            {
+                _volumePercent = previousAudioState.VolumePercent;
+                _isMuted = previousAudioState.IsMuted;
+                ApplyVolumeState();
+            }
+
             if (nextMedia is not null)
             {
                 try

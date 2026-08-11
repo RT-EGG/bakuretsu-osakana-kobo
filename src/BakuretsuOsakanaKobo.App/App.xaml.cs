@@ -23,6 +23,7 @@ public partial class App : Application
         var window = new MainWindow();
         MainWindow = window;
         _errorReporter = new ErrorReporter(_diagnosticLog, new MainWindowNotificationSink(window));
+        var videoProfiles = await InitializeVideoProfilesAsync(paths, _errorReporter);
         IPlaybackBackend? playbackBackend = null;
         try
         {
@@ -40,7 +41,7 @@ public partial class App : Application
                 exception);
         }
 
-        window.ConfigureServices(paths, _errorReporter, playbackBackend);
+        window.ConfigureServices(paths, _errorReporter, playbackBackend, videoProfiles);
         RegisterGlobalErrorHandlers();
         window.Show();
 
@@ -131,6 +132,44 @@ public partial class App : Application
                 saveResult.ErrorMessage ?? "The settings save failed.",
                 saveResult.Exception,
                 paths.SettingsFilePath);
+        }
+    }
+
+    private static async Task<VideoProfileRepository?> InitializeVideoProfilesAsync(
+        PortableDataPaths paths,
+        ErrorReporter errorReporter)
+    {
+        var repository = new VideoProfileRepository(paths.VideoProfilesFilePath);
+        try
+        {
+            var loadResult = await repository.LoadAsync();
+            if (loadResult.Warning is not null)
+            {
+                errorReporter.Report(
+                    new UserNotification(
+                        UserNotificationSeverity.Warning,
+                        "動画ごとの音量設定を読み込めなかったため、初期値で続行します。",
+                        "必要な動画の音量とミュートをもう一度指定してください。"),
+                    "video-profiles-load-recovered",
+                    loadResult.Warning,
+                    targetPath: paths.VideoProfilesFilePath);
+            }
+
+            return repository;
+        }
+        catch (Exception exception)
+        {
+            repository.Dispose();
+            errorReporter.Report(
+                new UserNotification(
+                    UserNotificationSeverity.Warning,
+                    "動画ごとの音量設定を初期化できませんでした。",
+                    "設定は保存されませんが、動画の再生は続行できます。"),
+                "video-profiles-initialization-failed",
+                exception.Message,
+                exception,
+                paths.VideoProfilesFilePath);
+            return null;
         }
     }
 

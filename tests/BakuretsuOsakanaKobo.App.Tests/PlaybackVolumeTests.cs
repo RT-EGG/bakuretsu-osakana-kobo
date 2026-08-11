@@ -6,6 +6,21 @@ namespace BakuretsuOsakanaKobo.App.Tests;
 public sealed class PlaybackVolumeTests
 {
     [Theory]
+    [InlineData(-1, 0, true)]
+    [InlineData(350, 350, false)]
+    [InlineData(501, 500, true)]
+    public void PlaybackAudioState_ClampsVolumeAndPreservesMute(
+        int requestedVolume,
+        int expectedVolume,
+        bool isMuted)
+    {
+        var state = new PlaybackAudioState(requestedVolume, isMuted);
+
+        Assert.Equal(expectedVolume, state.VolumePercent);
+        Assert.Equal(isMuted, state.IsMuted);
+    }
+
+    [Theory]
     [InlineData(-1, 0)]
     [InlineData(0, 0)]
     [InlineData(65, 65)]

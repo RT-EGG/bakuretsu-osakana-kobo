@@ -16,11 +16,14 @@ namespace BakuretsuOsakanaKobo;
 public partial class MainWindow : Window
 {
     private static readonly TimeSpan PlaybackTimelineRefreshInterval = TimeSpan.FromMilliseconds(200);
+    internal static readonly TimeSpan VideoProfileSaveDelay = TimeSpan.FromSeconds(3);
 
     private readonly DispatcherTimer _playbackTimelineTimer;
+    private readonly DispatcherTimer _videoProfileSaveTimer;
     private PortableDataPaths? _paths;
     private ErrorReporter? _errorReporter;
     private IPlaybackBackend? _playbackBackend;
+    private VideoProfileRepository? _videoProfiles;
     private CancellationTokenSource? _openCancellation;
     private Task? _openTask;
     private bool _isOpeningVideo;
@@ -28,6 +31,9 @@ public partial class MainWindow : Window
     private bool _isUpdatingVolumeSlider;
     private bool _isSeekDragging;
     private bool _hasPlaybackError;
+    private long _videoProfileRevision;
+    private long _savedVideoProfileRevision;
+    private Task<JsonSaveResult>? _videoProfileSaveTask;
     private DateTime _seekPresentationHoldUntilUtc;
     private bool _closeRequested;
     private bool _allowClose;
@@ -41,6 +47,11 @@ public partial class MainWindow : Window
             Interval = PlaybackTimelineRefreshInterval,
         };
         _playbackTimelineTimer.Tick += PlaybackTimelineTimer_OnTick;
+        _videoProfileSaveTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+        {
+            Interval = VideoProfileSaveDelay,
+        };
+        _videoProfileSaveTimer.Tick += VideoProfileSaveTimer_OnTick;
         SeekSlider.AddHandler(Thumb.DragStartedEvent, new DragStartedEventHandler(SeekSlider_OnDragStarted));
         SeekSlider.AddHandler(Thumb.DragCompletedEvent, new DragCompletedEventHandler(SeekSlider_OnDragCompleted));
     }
@@ -48,11 +59,13 @@ public partial class MainWindow : Window
     internal void ConfigureServices(
         PortableDataPaths paths,
         ErrorReporter errorReporter,
-        IPlaybackBackend? playbackBackend)
+        IPlaybackBackend? playbackBackend,
+        VideoProfileRepository? videoProfiles = null)
     {
         _paths = paths;
         _errorReporter = errorReporter;
         _playbackBackend = playbackBackend;
+        _videoProfiles = videoProfiles;
         OpenVideoMenuItem.IsEnabled = playbackBackend is not null;
 
         if (playbackBackend is LibVlcPlaybackBackend libVlcBackend)
@@ -173,7 +186,12 @@ public partial class MainWindow : Window
 
         try
         {
-            if (await _playbackBackend.OpenAndPlayAsync(path, openCancellation.Token))
+            await FlushVideoProfilesAsync();
+            var initialAudioState = GetInitialAudioState(path);
+            if (await _playbackBackend.OpenAndPlayAsync(
+                    path,
+                    initialAudioState,
+                    openCancellation.Token))
             {
                 _hasPlaybackError = false;
                 EmptyStatePanel.Visibility = Visibility.Collapsed;
@@ -307,15 +325,20 @@ public partial class MainWindow : Window
 
     protected override void OnClosing(CancelEventArgs e)
     {
-        if (!_allowClose && _openTask is { IsCompleted: false } openTask)
+        if (!_allowClose)
         {
             e.Cancel = true;
             if (!_closeRequested)
             {
                 _closeRequested = true;
                 OpenVideoMenuItem.IsEnabled = false;
+                PlayPauseButton.IsEnabled = false;
+                SeekSlider.IsEnabled = false;
+                VolumeSlider.IsEnabled = false;
+                MuteButton.IsEnabled = false;
                 _openCancellation?.Cancel();
-                _ = CloseAfterOpenCompletesAsync(openTask);
+                _videoProfileSaveTimer.Stop();
+                _ = CloseAfterPendingWorkCompletesAsync(_openTask);
             }
 
             return;
@@ -329,6 +352,8 @@ public partial class MainWindow : Window
         _disposed = true;
         _playbackTimelineTimer.Stop();
         _playbackTimelineTimer.Tick -= PlaybackTimelineTimer_OnTick;
+        _videoProfileSaveTimer.Stop();
+        _videoProfileSaveTimer.Tick -= VideoProfileSaveTimer_OnTick;
         SeekSlider.RemoveHandler(Thumb.DragStartedEvent, new DragStartedEventHandler(SeekSlider_OnDragStarted));
         SeekSlider.RemoveHandler(Thumb.DragCompletedEvent, new DragCompletedEventHandler(SeekSlider_OnDragCompleted));
         if (_playbackBackend is not null)
@@ -340,14 +365,22 @@ public partial class MainWindow : Window
         VideoView.MediaPlayer = null;
         _playbackBackend?.Dispose();
         _playbackBackend = null;
+        _videoProfiles?.Dispose();
+        _videoProfiles = null;
         base.OnClosed(e);
     }
 
-    private async Task CloseAfterOpenCompletesAsync(Task openTask)
+    private async Task CloseAfterPendingWorkCompletesAsync(Task? openTask)
     {
+        // OnClosing must return before Close is requested again when there is no pending work.
+        await Dispatcher.Yield(DispatcherPriority.Background);
+
         try
         {
-            await openTask;
+            if (openTask is not null)
+            {
+                await openTask;
+            }
         }
         catch (OperationCanceledException)
         {
@@ -355,6 +388,16 @@ public partial class MainWindow : Window
         catch (Exception)
         {
             // OpenVideoAsync reports the original failure before the window closes.
+        }
+
+        try
+        {
+            CaptureCurrentVideoProfile(scheduleSave: false);
+            await FlushVideoProfilesAsync();
+        }
+        catch (Exception exception)
+        {
+            ReportUnexpectedVideoProfileFailure(exception);
         }
 
         _allowClose = true;
@@ -469,6 +512,7 @@ public partial class MainWindow : Window
 
         backend.SetMuted(!backend.IsMuted);
         UpdateVolumeControls();
+        CaptureCurrentVideoProfile(scheduleSave: true);
     }
 
     private void VolumeSlider_OnValueChanged(
@@ -483,6 +527,7 @@ public partial class MainWindow : Window
 
         backend.SetVolumePercent((int)Math.Round(eventArgs.NewValue));
         UpdateVolumeControls();
+        CaptureCurrentVideoProfile(scheduleSave: true);
     }
 
     private void VideoSurface_OnPreviewMouseWheel(object sender, MouseWheelEventArgs eventArgs)
@@ -496,7 +541,124 @@ public partial class MainWindow : Window
         backend.SetVolumePercent(
             backend.VolumePercent + (Math.Sign(eventArgs.Delta) * PlaybackVolume.WheelStepPercent));
         UpdateVolumeControls();
+        CaptureCurrentVideoProfile(scheduleSave: true);
         eventArgs.Handled = true;
+    }
+
+    private PlaybackAudioState? GetInitialAudioState(string path)
+    {
+        var profiles = _videoProfiles;
+        if (profiles is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return profiles.TryGet(path, out var profile)
+                ? new PlaybackAudioState(profile.VolumePercent, profile.IsMuted)
+                : PlaybackAudioState.Default;
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            // Let the playback backend report the invalid path through its structured error path.
+            return null;
+        }
+    }
+
+    private void CaptureCurrentVideoProfile(bool scheduleSave)
+    {
+        var backend = _playbackBackend;
+        var profiles = _videoProfiles;
+        if (backend?.CurrentPath is null || profiles is null)
+        {
+            return;
+        }
+
+        profiles.Set(backend.CurrentPath, backend.VolumePercent, backend.IsMuted);
+        _videoProfileRevision++;
+        if (scheduleSave)
+        {
+            _videoProfileSaveTimer.Stop();
+            _videoProfileSaveTimer.Start();
+        }
+    }
+
+    private async void VideoProfileSaveTimer_OnTick(object? sender, EventArgs eventArgs)
+    {
+        _videoProfileSaveTimer.Stop();
+        try
+        {
+            await FlushVideoProfilesAsync();
+        }
+        catch (Exception exception)
+        {
+            ReportUnexpectedVideoProfileFailure(exception);
+        }
+    }
+
+    private async Task FlushVideoProfilesAsync()
+    {
+        var profiles = _videoProfiles;
+        if (profiles is null || _savedVideoProfileRevision >= _videoProfileRevision)
+        {
+            return;
+        }
+
+        if (_videoProfileSaveTask is { IsCompleted: false } pendingSave)
+        {
+            await pendingSave;
+            if (_savedVideoProfileRevision >= _videoProfileRevision)
+            {
+                return;
+            }
+        }
+
+        var revision = _videoProfileRevision;
+        var saveTask = profiles.SaveAsync();
+        _videoProfileSaveTask = saveTask;
+        JsonSaveResult saveResult;
+        try
+        {
+            saveResult = await saveTask;
+        }
+        finally
+        {
+            if (ReferenceEquals(_videoProfileSaveTask, saveTask))
+            {
+                _videoProfileSaveTask = null;
+            }
+        }
+
+        if (saveResult.Success)
+        {
+            _savedVideoProfileRevision = Math.Max(_savedVideoProfileRevision, revision);
+            return;
+        }
+
+        _errorReporter?.Report(
+            new UserNotification(
+                UserNotificationSeverity.Warning,
+                "動画ごとの音量設定を保存できません。",
+                "再生は続行できます。アプリの配置先に書き込み権限があるか確認してください。"),
+            "video-profiles-save-failed",
+            saveResult.ErrorMessage ?? "The video profile save failed.",
+            saveResult.Exception,
+            profiles.FilePath);
+    }
+
+    private void ReportUnexpectedVideoProfileFailure(Exception exception)
+    {
+        _errorReporter?.Report(
+            new UserNotification(
+                UserNotificationSeverity.Warning,
+                "動画ごとの音量設定を保存できません。",
+                "再生は続行できます。アプリの配置先に書き込み権限があるか確認してください。"),
+            "video-profiles-save-unexpected-failure",
+            exception.Message,
+            exception,
+            _videoProfiles?.FilePath);
     }
 
     private void SeekSlider_OnValueChanged(object sender, RoutedPropertyChangedEventArgs<double> eventArgs)

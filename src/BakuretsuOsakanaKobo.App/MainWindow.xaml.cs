@@ -26,6 +26,8 @@ public partial class MainWindow : Window
 
     internal bool IsTemporaryPlaybackRateActive => _temporaryPlaybackRateGesture.IsActive;
 
+    internal bool IsFullscreen => _isFullscreen;
+
     private readonly DispatcherTimer _playbackTimelineTimer;
     private readonly DispatcherTimer _videoProfileSaveTimer;
     private readonly DispatcherTimer _temporaryPlaybackRateTimer;
@@ -49,6 +51,10 @@ public partial class MainWindow : Window
     private bool _closeRequested;
     private bool _allowClose;
     private bool _disposed;
+    private bool _isFullscreen;
+    private WindowState _windowStateBeforeFullscreen;
+    private WindowStyle _windowStyleBeforeFullscreen;
+    private ResizeMode _resizeModeBeforeFullscreen;
     private HwndSource? _windowSource;
 
     public MainWindow()
@@ -597,6 +603,12 @@ public partial class MainWindow : Window
         if (eventArgs.ClickCount >= 2)
         {
             EndTemporaryPlaybackRateGesture();
+            if (CanControlPlaybackRate() && !HasInputAncestor(eventArgs.OriginalSource as DependencyObject))
+            {
+                ToggleFullscreen();
+                eventArgs.Handled = true;
+            }
+
             return;
         }
 
@@ -751,8 +763,88 @@ public partial class MainWindow : Window
             ? System.Windows.Media.VisualTreeHelper.GetParent(current)
             : LogicalTreeHelper.GetParent(current);
 
-    private void VideoContextMenu_OnOpened(object sender, RoutedEventArgs eventArgs) =>
+    private void VideoContextMenu_OnOpened(object sender, RoutedEventArgs eventArgs)
+    {
         UpdatePlaybackRateControls();
+        FullscreenMenuItem.IsChecked = _isFullscreen;
+    }
+
+    private void FullscreenMenuItem_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        ToggleFullscreen();
+        FullscreenMenuItem.IsChecked = _isFullscreen;
+        eventArgs.Handled = true;
+    }
+
+    private void Window_OnPreviewKeyDown(object sender, KeyEventArgs eventArgs)
+    {
+        var key = eventArgs.Key == Key.System ? eventArgs.SystemKey : eventArgs.Key;
+        switch (FullscreenShortcutMap.Resolve(key, Keyboard.Modifiers, _isFullscreen))
+        {
+            case FullscreenShortcutAction.Toggle:
+                ToggleFullscreen();
+                eventArgs.Handled = true;
+                break;
+            case FullscreenShortcutAction.Exit:
+                ExitFullscreen();
+                eventArgs.Handled = true;
+                break;
+        }
+    }
+
+    private void ToggleFullscreen()
+    {
+        if (_isFullscreen)
+        {
+            ExitFullscreen();
+        }
+        else
+        {
+            EnterFullscreen();
+        }
+    }
+
+    private void EnterFullscreen()
+    {
+        if (_isFullscreen)
+        {
+            return;
+        }
+
+        EndTemporaryPlaybackRateGesture();
+        _windowStateBeforeFullscreen = WindowState;
+        _windowStyleBeforeFullscreen = WindowStyle;
+        _resizeModeBeforeFullscreen = ResizeMode;
+
+        WindowState = WindowState.Normal;
+        WindowStyle = WindowStyle.None;
+        ResizeMode = ResizeMode.NoResize;
+        MainMenu.Visibility = Visibility.Collapsed;
+        Grid.SetRow(VideoSurface, 0);
+        Grid.SetRowSpan(VideoSurface, 4);
+        PlaybackControls.Opacity = 0.94;
+        WindowState = WindowState.Maximized;
+        _isFullscreen = true;
+    }
+
+    private void ExitFullscreen()
+    {
+        if (!_isFullscreen)
+        {
+            return;
+        }
+
+        EndTemporaryPlaybackRateGesture();
+        WindowState = WindowState.Normal;
+        WindowStyle = _windowStyleBeforeFullscreen;
+        ResizeMode = _resizeModeBeforeFullscreen;
+        Grid.SetRow(VideoSurface, 1);
+        Grid.SetRowSpan(VideoSurface, 1);
+        PlaybackControls.Opacity = 1;
+        MainMenu.Visibility = Visibility.Visible;
+        _isFullscreen = false;
+        WindowState = _windowStateBeforeFullscreen;
+    }
 
     private void PlaybackRateMenuItem_OnClick(object sender, RoutedEventArgs eventArgs)
     {

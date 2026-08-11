@@ -31,6 +31,7 @@ internal static class Program
         var processClock = Stopwatch.StartNew();
         var validateProfiles = Environment.GetEnvironmentVariable("BOK_VIDEO_PROFILE_VALIDATION") == "1";
         var validateGestures = Environment.GetEnvironmentVariable("BOK_GESTURE_VALIDATION") == "1";
+        var validateFullscreen = Environment.GetEnvironmentVariable("BOK_FULLSCREEN_VALIDATION") == "1";
         var profileFilePath = $"{Path.GetFullPath(args[1])}.video-profiles.json";
         VideoProfileRepository? videoProfiles = null;
         if (validateProfiles)
@@ -124,6 +125,9 @@ internal static class Program
                     videoSurface,
                     backend,
                     args[0]);
+                var fullscreenValidation = validateFullscreen
+                    ? await ValidateFullscreenAsync(window, videoRegion, videoSurface, volumeSlider, backend)
+                    : null;
                 var temporaryPlaybackRateValidation = validateGestures
                     ? await ValidateTemporaryPlaybackRateGestureAsync(
                         window,
@@ -154,6 +158,7 @@ internal static class Program
                     seek90PercentMs = seek90Milliseconds,
                     lengthMilliseconds,
                     playbackRateValidation,
+                    fullscreenValidation,
                     temporaryPlaybackRateValidation,
                     volumeValidation,
                     audibleValidation,
@@ -526,6 +531,17 @@ internal static class Program
             NativeMethods.MouseLeftClick();
             await Task.Delay(TemporaryPlaybackRateGesture.HoldDuration + TimeSpan.FromMilliseconds(100));
             Ensure(PlaybackRate.AreEqual(backend.Rate, 0.5f), "A double click triggered temporary 2.0x.");
+            Ensure(window.IsFullscreen, "A real double click did not enter fullscreen.");
+            await Task.Delay(600);
+            MoveCursor(videoRegion.PointToScreen(
+                new Point(videoRegion.ActualWidth / 2, videoRegion.ActualHeight / 2)));
+            NativeMethods.MouseLeftClick();
+            await Task.Delay(80);
+            NativeMethods.MouseLeftClick();
+            await WaitUntilAsync(
+                () => !window.IsFullscreen,
+                TimeSpan.FromSeconds(1),
+                "A second real double click did not exit fullscreen.");
 
             NativeMethods.MouseRightClick();
             await WaitUntilAsync(
@@ -596,6 +612,212 @@ internal static class Program
             window.Topmost = false;
         }
     }
+
+    private static async Task<object> ValidateFullscreenAsync(
+        MainWindow window,
+        FrameworkElement videoRegion,
+        FrameworkElement videoSurface,
+        Slider volumeSlider,
+        LibVlcPlaybackBackend backend)
+    {
+        Ensure(backend.IsMuted, "Fullscreen validation must remain muted.");
+        var windowHandle = new WindowInteropHelper(window).Handle;
+        var initialState = window.WindowState;
+        var initialStyle = window.WindowStyle;
+        var initialResizeMode = window.ResizeMode;
+        var initialBounds = window.RestoreBounds;
+        var initialMonitor = NativeMethods.MonitorFromWindow(
+            windowHandle,
+            NativeMethods.MonitorDefaultToNearest);
+        Ensure(initialMonitor != 0, "Could not identify the window's current monitor.");
+        var monitorInfo = NativeMethods.GetMonitorInformation(initialMonitor);
+        var contextMenu = videoSurface.ContextMenu ??
+            throw new InvalidOperationException("The video context menu was not found.");
+        var fullscreenMenuItem = (MenuItem)window.FindName("FullscreenMenuItem");
+        var mainMenu = (Menu)window.FindName("MainMenu");
+        var playbackControls = (FrameworkElement)window.FindName("PlaybackControls");
+        Ensure(NativeMethods.GetCursorPos(out var originalCursor), "Could not read the current cursor position.");
+
+        window.Topmost = true;
+        window.Activate();
+        NativeMethods.SetForegroundWindow(windowHandle);
+        await Task.Delay(100);
+        try
+        {
+            MoveCursor(videoRegion.PointToScreen(
+                new Point(videoRegion.ActualWidth / 2, videoRegion.ActualHeight / 2)));
+            NativeMethods.MouseLeftClick();
+            await Task.Delay(80);
+            NativeMethods.MouseLeftClick();
+            await WaitUntilAsync(
+                () => window.IsFullscreen,
+                TimeSpan.FromSeconds(1),
+                "A real double click did not enter fullscreen.");
+            await Task.Delay(150);
+            Ensure(window.WindowStyle == WindowStyle.None, "Fullscreen did not remove the window frame.");
+            Ensure(window.ResizeMode == ResizeMode.NoResize, "Fullscreen did not disable resizing.");
+            Ensure(window.WindowState == WindowState.Maximized, "Fullscreen did not maximize the window.");
+            Ensure(mainMenu.Visibility == Visibility.Collapsed, "Fullscreen did not hide the main menu.");
+            Ensure(Grid.GetRow(videoRegion) == 0 && Grid.GetRowSpan(videoRegion) == 4, "Video did not fill the fullscreen layout.");
+            Ensure(playbackControls.Visibility == Visibility.Visible, "Playback controls were not visible on fullscreen entry.");
+            Ensure(
+                NativeMethods.MonitorFromWindow(windowHandle, NativeMethods.MonitorDefaultToNearest) == initialMonitor,
+                "Fullscreen moved to a different monitor.");
+            Ensure(NativeMethods.GetWindowRect(windowHandle, out var fullscreenBounds), "Could not read fullscreen bounds.");
+            Ensure(
+                fullscreenBounds.Equals(monitorInfo.Monitor),
+                $"Fullscreen bounds {fullscreenBounds} did not match monitor bounds {monitorInfo.Monitor}.");
+
+            await Task.Delay(600);
+            MoveCursor(videoRegion.PointToScreen(
+                new Point(videoRegion.ActualWidth / 2, videoRegion.ActualHeight / 2)));
+            NativeMethods.MouseLeftClick();
+            await Task.Delay(80);
+            NativeMethods.MouseLeftClick();
+            await WaitUntilAsync(
+                () => !window.IsFullscreen,
+                TimeSpan.FromSeconds(1),
+                "A second real double click did not exit fullscreen.");
+            EnsureWindowPresentationRestored(
+                window,
+                mainMenu,
+                videoRegion,
+                initialState,
+                initialStyle,
+                initialResizeMode,
+                initialBounds);
+
+            MoveCursor(videoRegion.PointToScreen(
+                new Point(videoRegion.ActualWidth / 2, videoRegion.ActualHeight / 2)));
+            NativeMethods.MouseRightClick();
+            await WaitUntilAsync(
+                () => contextMenu.IsOpen,
+                TimeSpan.FromSeconds(1),
+                "A real right click did not open the video context menu.");
+            Ensure(!fullscreenMenuItem.IsChecked, "The fullscreen menu item was checked before entry.");
+            fullscreenMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            await WaitUntilAsync(
+                () => window.IsFullscreen,
+                TimeSpan.FromSeconds(1),
+                "The context-menu command did not enter fullscreen.");
+            contextMenu.IsOpen = false;
+            NativeMethods.PressKey(NativeMethods.VirtualKeyEscape);
+            await WaitUntilAsync(
+                () => !window.IsFullscreen,
+                TimeSpan.FromSeconds(1),
+                "Escape did not exit fullscreen.");
+
+            volumeSlider.Focus();
+            NativeMethods.PressAltEnter();
+            await WaitUntilAsync(
+                () => window.IsFullscreen,
+                TimeSpan.FromSeconds(1),
+                "Alt+Enter did not enter fullscreen while an input control had focus.");
+            NativeMethods.PressAltEnter();
+            await WaitUntilAsync(
+                () => !window.IsFullscreen,
+                TimeSpan.FromSeconds(1),
+                "Alt+Enter did not exit fullscreen.");
+            EnsureWindowPresentationRestored(
+                window,
+                mainMenu,
+                videoRegion,
+                initialState,
+                initialStyle,
+                initialResizeMode,
+                initialBounds);
+
+            window.WindowState = WindowState.Maximized;
+            await WaitUntilAsync(
+                () => window.WindowState == WindowState.Maximized,
+                TimeSpan.FromSeconds(1),
+                "Could not prepare a maximized window for restore validation.");
+            NativeMethods.PressAltEnter();
+            await WaitUntilAsync(
+                () => window.IsFullscreen,
+                TimeSpan.FromSeconds(1),
+                "Alt+Enter did not enter fullscreen from a maximized window.");
+            NativeMethods.PressKey(NativeMethods.VirtualKeyEscape);
+            await WaitUntilAsync(
+                () => !window.IsFullscreen && window.WindowState == WindowState.Maximized,
+                TimeSpan.FromSeconds(1),
+                "Fullscreen exit did not restore the maximized window state.");
+            window.WindowState = WindowState.Normal;
+            await WaitUntilAsync(
+                () => window.WindowState == initialState,
+                TimeSpan.FromSeconds(1),
+                "Could not restore the validation window to its initial state.");
+            EnsureWindowPresentationRestored(
+                window,
+                mainMenu,
+                videoRegion,
+                initialState,
+                initialStyle,
+                initialResizeMode,
+                initialBounds);
+
+            return new
+            {
+                currentMonitorHandle = initialMonitor.ToInt64(),
+                monitorBounds = ToReportBounds(monitorInfo.Monitor),
+                fullscreenBounds = ToReportBounds(fullscreenBounds),
+                doubleClickEnteredAndExited = true,
+                contextMenuEntered = true,
+                escapeExited = true,
+                altEnterEnteredAndExitedWithInputFocus = true,
+                maximizedStateRestored = true,
+                restoredState = window.WindowState.ToString(),
+                restoredBounds = window.RestoreBounds,
+                finalMuted = backend.IsMuted,
+            };
+        }
+        finally
+        {
+            contextMenu.IsOpen = false;
+            if (window.IsFullscreen)
+            {
+                NativeMethods.PressKey(NativeMethods.VirtualKeyEscape);
+                await WaitUntilAsync(
+                    () => !window.IsFullscreen,
+                    TimeSpan.FromSeconds(1),
+                    "Fullscreen cleanup failed.");
+            }
+
+            NativeMethods.SetCursorPos(originalCursor.X, originalCursor.Y);
+            window.Topmost = false;
+        }
+    }
+
+    private static void EnsureWindowPresentationRestored(
+        MainWindow window,
+        Menu mainMenu,
+        FrameworkElement videoRegion,
+        WindowState initialState,
+        WindowStyle initialStyle,
+        ResizeMode initialResizeMode,
+        Rect initialBounds)
+    {
+        Ensure(window.WindowState == initialState, "Fullscreen exit did not restore the window state.");
+        Ensure(window.WindowStyle == initialStyle, "Fullscreen exit did not restore the window style.");
+        Ensure(window.ResizeMode == initialResizeMode, "Fullscreen exit did not restore the resize mode.");
+        Ensure(mainMenu.Visibility == Visibility.Visible, "Fullscreen exit did not restore the main menu.");
+        Ensure(Grid.GetRow(videoRegion) == 1 && Grid.GetRowSpan(videoRegion) == 1, "Fullscreen exit did not restore the video layout.");
+        Ensure(AreClose(window.RestoreBounds, initialBounds), "Fullscreen exit did not restore the window bounds.");
+    }
+
+    private static bool AreClose(Rect left, Rect right) =>
+        Math.Abs(left.Left - right.Left) < 1 &&
+        Math.Abs(left.Top - right.Top) < 1 &&
+        Math.Abs(left.Width - right.Width) < 1 &&
+        Math.Abs(left.Height - right.Height) < 1;
+
+    private static object ToReportBounds(NativeRect bounds) => new
+    {
+        bounds.Left,
+        bounds.Top,
+        bounds.Right,
+        bounds.Bottom,
+    };
 
     private static void MoveCursor(Point point)
     {
@@ -746,6 +968,11 @@ internal static class Program
         private const uint MouseEventRightDown = 0x0008;
         private const uint MouseEventRightUp = 0x0010;
         private const uint MouseEventWheel = 0x0800;
+        private const uint KeyEventKeyUp = 0x0002;
+        private const byte VirtualKeyMenu = 0x12;
+        private const byte VirtualKeyReturn = 0x0D;
+        internal const byte VirtualKeyEscape = 0x1B;
+        internal const uint MonitorDefaultToNearest = 0x00000002;
         internal const int WindowMessageActivateApplication = 0x001C;
 
         [DllImport("user32.dll")]
@@ -761,10 +988,24 @@ internal static class Program
         internal static extern bool SetForegroundWindow(nint windowHandle);
 
         [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool GetWindowRect(nint windowHandle, out NativeRect rectangle);
+
+        [DllImport("user32.dll")]
+        internal static extern nint MonitorFromWindow(nint windowHandle, uint flags);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetMonitorInfo(nint monitor, ref MonitorInfo monitorInfo);
+
+        [DllImport("user32.dll")]
         internal static extern nint SendMessage(nint windowHandle, int message, nint wordParameter, nint longParameter);
 
         [DllImport("user32.dll", EntryPoint = "mouse_event")]
         private static extern void MouseEvent(uint flags, uint dx, uint dy, uint data, nuint extraInfo);
+
+        [DllImport("user32.dll", EntryPoint = "keybd_event")]
+        private static extern void KeyEvent(byte virtualKey, byte scanCode, uint flags, nuint extraInfo);
 
         internal static void MouseLeftDown() => MouseEvent(MouseEventLeftDown, 0, 0, 0, 0);
 
@@ -784,6 +1025,26 @@ internal static class Program
 
         internal static void MouseWheel(int delta) =>
             MouseEvent(MouseEventWheel, 0, 0, unchecked((uint)delta), 0);
+
+        internal static void PressKey(byte virtualKey)
+        {
+            KeyEvent(virtualKey, 0, 0, 0);
+            KeyEvent(virtualKey, 0, KeyEventKeyUp, 0);
+        }
+
+        internal static void PressAltEnter()
+        {
+            KeyEvent(VirtualKeyMenu, 0, 0, 0);
+            PressKey(VirtualKeyReturn);
+            KeyEvent(VirtualKeyMenu, 0, KeyEventKeyUp, 0);
+        }
+
+        internal static MonitorInfo GetMonitorInformation(nint monitor)
+        {
+            var info = new MonitorInfo { Size = (uint)Marshal.SizeOf<MonitorInfo>() };
+            Ensure(GetMonitorInfo(monitor, ref info), "Could not read monitor bounds.");
+            return info;
+        }
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -791,5 +1052,32 @@ internal static class Program
     {
         internal int X;
         internal int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly struct NativeRect : IEquatable<NativeRect>
+    {
+        internal readonly int Left;
+        internal readonly int Top;
+        internal readonly int Right;
+        internal readonly int Bottom;
+
+        public bool Equals(NativeRect other) =>
+            Left == other.Left && Top == other.Top && Right == other.Right && Bottom == other.Bottom;
+
+        public override bool Equals(object? value) => value is NativeRect other && Equals(other);
+
+        public override int GetHashCode() => HashCode.Combine(Left, Top, Right, Bottom);
+
+        public override string ToString() => $"({Left},{Top})-({Right},{Bottom})";
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+    private struct MonitorInfo
+    {
+        internal uint Size;
+        internal NativeRect Monitor;
+        internal NativeRect WorkArea;
+        internal uint Flags;
     }
 }

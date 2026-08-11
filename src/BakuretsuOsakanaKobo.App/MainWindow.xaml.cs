@@ -6,6 +6,7 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Threading;
 using BakuretsuOsakanaKobo.Infrastructure.Errors;
 using BakuretsuOsakanaKobo.Infrastructure.Persistence;
@@ -17,10 +18,19 @@ namespace BakuretsuOsakanaKobo;
 public partial class MainWindow : Window
 {
     private static readonly TimeSpan PlaybackTimelineRefreshInterval = TimeSpan.FromMilliseconds(200);
+    private static readonly TimeSpan TemporaryPlaybackRateReleasePollInterval = TimeSpan.FromMilliseconds(25);
+    private const int WindowMessageActivateApplication = 0x001C;
     internal static readonly TimeSpan VideoProfileSaveDelay = TimeSpan.FromSeconds(3);
+
+    internal bool IsTemporaryPlaybackRatePending => _temporaryPlaybackRateGesture.IsPending;
+
+    internal bool IsTemporaryPlaybackRateActive => _temporaryPlaybackRateGesture.IsActive;
 
     private readonly DispatcherTimer _playbackTimelineTimer;
     private readonly DispatcherTimer _videoProfileSaveTimer;
+    private readonly DispatcherTimer _temporaryPlaybackRateTimer;
+    private readonly DispatcherTimer _temporaryPlaybackRateReleaseTimer;
+    private readonly TemporaryPlaybackRateGesture _temporaryPlaybackRateGesture = new();
     private PortableDataPaths? _paths;
     private ErrorReporter? _errorReporter;
     private IPlaybackBackend? _playbackBackend;
@@ -39,6 +49,7 @@ public partial class MainWindow : Window
     private bool _closeRequested;
     private bool _allowClose;
     private bool _disposed;
+    private HwndSource? _windowSource;
 
     public MainWindow()
     {
@@ -53,6 +64,16 @@ public partial class MainWindow : Window
             Interval = VideoProfileSaveDelay,
         };
         _videoProfileSaveTimer.Tick += VideoProfileSaveTimer_OnTick;
+        _temporaryPlaybackRateTimer = new DispatcherTimer(DispatcherPriority.Input, Dispatcher)
+        {
+            Interval = TemporaryPlaybackRateGesture.HoldDuration,
+        };
+        _temporaryPlaybackRateTimer.Tick += TemporaryPlaybackRateTimer_OnTick;
+        _temporaryPlaybackRateReleaseTimer = new DispatcherTimer(DispatcherPriority.Input, Dispatcher)
+        {
+            Interval = TemporaryPlaybackRateReleasePollInterval,
+        };
+        _temporaryPlaybackRateReleaseTimer.Tick += TemporaryPlaybackRateReleaseTimer_OnTick;
         SeekSlider.AddHandler(Thumb.DragStartedEvent, new DragStartedEventHandler(SeekSlider_OnDragStarted));
         SeekSlider.AddHandler(Thumb.DragCompletedEvent, new DragCompletedEventHandler(SeekSlider_OnDragCompleted));
     }
@@ -92,6 +113,13 @@ public partial class MainWindow : Window
         NotificationMessageText.Text = notification.Message;
         NotificationActionText.Text = notification.SuggestedAction;
         NotificationBorder.Visibility = Visibility.Visible;
+    }
+
+    protected override void OnSourceInitialized(EventArgs eventArgs)
+    {
+        base.OnSourceInitialized(eventArgs);
+        _windowSource = (HwndSource?)PresentationSource.FromVisual(this);
+        _windowSource?.AddHook(WindowMessageHook);
     }
 
     private void OpenDataFolderMenuItem_OnClick(object sender, RoutedEventArgs e)
@@ -175,6 +203,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        EndTemporaryPlaybackRateGesture();
         OpenVideoMenuItem.IsEnabled = false;
         PlayPauseButton.IsEnabled = false;
         UpdatePlaybackTimeline();
@@ -315,6 +344,7 @@ public partial class MainWindow : Window
 
         if (eventArgs.EventCode is "playback-native-error" or "playback-audio-output-error")
         {
+            EndTemporaryPlaybackRateGesture();
             _hasPlaybackError = true;
             UpdateVolumeControls();
             UpdatePlaybackRateControls();
@@ -339,6 +369,7 @@ public partial class MainWindow : Window
             if (!_closeRequested)
             {
                 _closeRequested = true;
+                EndTemporaryPlaybackRateGesture();
                 OpenVideoMenuItem.IsEnabled = false;
                 PlayPauseButton.IsEnabled = false;
                 SeekSlider.IsEnabled = false;
@@ -364,6 +395,12 @@ public partial class MainWindow : Window
         _playbackTimelineTimer.Tick -= PlaybackTimelineTimer_OnTick;
         _videoProfileSaveTimer.Stop();
         _videoProfileSaveTimer.Tick -= VideoProfileSaveTimer_OnTick;
+        _temporaryPlaybackRateTimer.Stop();
+        _temporaryPlaybackRateTimer.Tick -= TemporaryPlaybackRateTimer_OnTick;
+        _temporaryPlaybackRateReleaseTimer.Stop();
+        _temporaryPlaybackRateReleaseTimer.Tick -= TemporaryPlaybackRateReleaseTimer_OnTick;
+        _windowSource?.RemoveHook(WindowMessageHook);
+        _windowSource = null;
         SeekSlider.RemoveHandler(Thumb.DragStartedEvent, new DragStartedEventHandler(SeekSlider_OnDragStarted));
         SeekSlider.RemoveHandler(Thumb.DragCompletedEvent, new DragCompletedEventHandler(SeekSlider_OnDragCompleted));
         if (_playbackBackend is not null)
@@ -555,6 +592,165 @@ public partial class MainWindow : Window
         eventArgs.Handled = true;
     }
 
+    private void VideoSurface_OnPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs eventArgs)
+    {
+        if (eventArgs.ClickCount >= 2)
+        {
+            EndTemporaryPlaybackRateGesture();
+            return;
+        }
+
+        if (!CanControlPlaybackRate() || HasInputAncestor(eventArgs.OriginalSource as DependencyObject))
+        {
+            return;
+        }
+
+        VideoInteractionSurface.Focus();
+        var startPoint = eventArgs.GetPosition(VideoInteractionSurface);
+        _temporaryPlaybackRateGesture.Begin(startPoint.X, startPoint.Y);
+        _temporaryPlaybackRateTimer.Stop();
+        _temporaryPlaybackRateTimer.Start();
+        if (!Mouse.Capture(VideoInteractionSurface))
+        {
+            _temporaryPlaybackRateTimer.Stop();
+            _temporaryPlaybackRateGesture.Cancel();
+        }
+
+        UpdatePlaybackRateControls();
+    }
+
+    private void VideoSurface_OnPreviewMouseMove(object sender, MouseEventArgs eventArgs)
+    {
+        var point = eventArgs.GetPosition(VideoInteractionSurface);
+        if (_temporaryPlaybackRateGesture.CancelIfMoved(
+                point.X,
+                point.Y,
+                SystemParameters.MinimumHorizontalDragDistance,
+                SystemParameters.MinimumVerticalDragDistance))
+        {
+            EndTemporaryPlaybackRateGesture();
+        }
+    }
+
+    private void VideoSurface_OnPreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs eventArgs)
+    {
+        var wasGestureInProgress =
+            _temporaryPlaybackRateGesture.IsPending ||
+            _temporaryPlaybackRateGesture.IsActive;
+        EndTemporaryPlaybackRateGesture();
+        eventArgs.Handled = wasGestureInProgress;
+    }
+
+    private void VideoSurface_OnLostMouseCapture(object sender, MouseEventArgs eventArgs)
+    {
+        if (_temporaryPlaybackRateGesture.IsActive)
+        {
+            return;
+        }
+
+        if (_temporaryPlaybackRateGesture.IsPending)
+        {
+            EndTemporaryPlaybackRateGesture();
+        }
+    }
+
+    private void TemporaryPlaybackRateTimer_OnTick(object? sender, EventArgs eventArgs)
+    {
+        _temporaryPlaybackRateTimer.Stop();
+        var backend = _playbackBackend;
+        if (backend is null ||
+            !_temporaryPlaybackRateGesture.TryActivate(
+                Mouse.LeftButton == MouseButtonState.Pressed && CanControlPlaybackRate(),
+                backend.Rate))
+        {
+            EndTemporaryPlaybackRateGesture();
+            return;
+        }
+
+        if (!backend.TrySetRate(2.0f))
+        {
+            _temporaryPlaybackRateGesture.Cancel();
+            ReleaseVideoSurfaceMouseCapture();
+            ReportPlaybackRateFailure(
+                "playback-temporary-rate-change-rejected",
+                "長押しの一時2.0倍速を開始できませんでした。");
+        }
+        else
+        {
+            _temporaryPlaybackRateReleaseTimer.Start();
+        }
+
+        UpdatePlaybackRateControls();
+    }
+
+    private void TemporaryPlaybackRateReleaseTimer_OnTick(object? sender, EventArgs eventArgs)
+    {
+        if (_temporaryPlaybackRateGesture.IsActive && Mouse.LeftButton == MouseButtonState.Released)
+        {
+            EndTemporaryPlaybackRateGesture();
+        }
+    }
+
+    private void EndTemporaryPlaybackRateGesture()
+    {
+        _temporaryPlaybackRateTimer.Stop();
+        _temporaryPlaybackRateReleaseTimer.Stop();
+        var rateToRestore = _temporaryPlaybackRateGesture.End();
+        var backend = _playbackBackend;
+        if (rateToRestore is { } rate &&
+            backend?.CurrentPath is not null &&
+            !backend.TrySetRate(rate))
+        {
+            ReportPlaybackRateFailure(
+                "playback-temporary-rate-restore-rejected",
+                "長押し前の再生速度へ戻せませんでした。");
+        }
+
+        ReleaseVideoSurfaceMouseCapture();
+        UpdatePlaybackRateControls();
+    }
+
+    private void ReleaseVideoSurfaceMouseCapture()
+    {
+        if (Mouse.Captured == VideoInteractionSurface)
+        {
+            Mouse.Capture(null);
+        }
+    }
+
+    private nint WindowMessageHook(
+        nint windowHandle,
+        int message,
+        nint wordParameter,
+        nint longParameter,
+        ref bool handled)
+    {
+        if (message == WindowMessageActivateApplication && wordParameter == 0)
+        {
+            EndTemporaryPlaybackRateGesture();
+        }
+
+        return 0;
+    }
+
+    private static bool HasInputAncestor(DependencyObject? source)
+    {
+        for (var current = source; current is not null; current = GetParent(current))
+        {
+            if (current is ButtonBase or Slider or ComboBox or TextBoxBase or PasswordBox or MenuItem)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static DependencyObject? GetParent(DependencyObject current) =>
+        current is System.Windows.Media.Visual or System.Windows.Media.Media3D.Visual3D
+            ? System.Windows.Media.VisualTreeHelper.GetParent(current)
+            : LogicalTreeHelper.GetParent(current);
+
     private void VideoContextMenu_OnOpened(object sender, RoutedEventArgs eventArgs) =>
         UpdatePlaybackRateControls();
 
@@ -571,14 +767,10 @@ public partial class MainWindow : Window
 
         if (!backend.TrySetRate(rate))
         {
-            _errorReporter?.Report(
-                new UserNotification(
-                    UserNotificationSeverity.Warning,
-                    "再生速度を変更できませんでした。",
-                    "動画を開き直して、もう一度お試しください。"),
+            ReportPlaybackRateFailure(
                 "playback-rate-change-rejected",
-                $"The playback backend rejected rate {rateText}.",
-                targetPath: backend.CurrentPath);
+                "再生速度を変更できませんでした。",
+                $"The playback backend rejected rate {rateText}.");
         }
 
         UpdatePlaybackRateControls();
@@ -598,11 +790,9 @@ public partial class MainWindow : Window
         PlaybackRateText.Text = formattedRate;
         AutomationProperties.SetName(PlaybackRateText, $"現在の再生速度 {formattedRate}");
         PlaybackRateMenuItem.IsEnabled =
-            backend?.CurrentPath is not null &&
-            _openTask is null &&
-            !_isOpeningVideo &&
-            !_hasPlaybackError &&
-            !_closeRequested;
+            CanControlPlaybackRate() &&
+            !_temporaryPlaybackRateGesture.IsPending &&
+            !_temporaryPlaybackRateGesture.IsActive;
 
         foreach (var item in PlaybackRateMenuItem.Items.OfType<MenuItem>())
         {
@@ -611,6 +801,28 @@ public partial class MainWindow : Window
                 PlaybackRate.TryParse(rateText, out var itemRate) &&
                 PlaybackRate.AreEqual(itemRate, currentRate);
         }
+    }
+
+    private bool CanControlPlaybackRate() =>
+        _playbackBackend?.CurrentPath is not null &&
+        _openTask is null &&
+        !_isOpeningVideo &&
+        !_hasPlaybackError &&
+        !_closeRequested;
+
+    private void ReportPlaybackRateFailure(
+        string eventCode,
+        string message,
+        string? technicalMessage = null)
+    {
+        _errorReporter?.Report(
+            new UserNotification(
+                UserNotificationSeverity.Warning,
+                message,
+                "動画を開き直して、もう一度お試しください。"),
+            eventCode,
+            technicalMessage ?? message,
+            targetPath: _playbackBackend?.CurrentPath);
     }
 
     private PlaybackAudioState? GetInitialAudioState(string path)

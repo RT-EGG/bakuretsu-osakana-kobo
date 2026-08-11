@@ -163,6 +163,17 @@ internal sealed class RealtimeAudioOutput : IDisposable
         _stateChanged.Set();
     }
 
+    public void PrepareForRateChange()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        lock (_sync)
+        {
+            ResetBufferedAudio();
+        }
+
+        _stateChanged.Set();
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -262,13 +273,7 @@ internal sealed class RealtimeAudioOutput : IDisposable
         {
             lock (_sync)
             {
-                Interlocked.Increment(ref _flushCount);
-                Interlocked.Add(ref _flushedBytes, _buffer.BufferedBytes);
-                Interlocked.Add(ref _discardedLimiterFrames, _processor.PendingFrames);
-                _buffer.ClearBuffer();
-                _processor.Reset();
-                _isDraining = false;
-                _isRebuffering = true;
+                ResetBufferedAudio();
             }
 
             _stateChanged.Set();
@@ -432,6 +437,17 @@ internal sealed class RealtimeAudioOutput : IDisposable
             Interlocked.Increment(ref _overflowCount);
             throw new InvalidOperationException("The bounded PCM buffer overflowed.", exception);
         }
+    }
+
+    private void ResetBufferedAudio()
+    {
+        Interlocked.Increment(ref _flushCount);
+        Interlocked.Add(ref _flushedBytes, _buffer.BufferedBytes);
+        Interlocked.Add(ref _discardedLimiterFrames, _processor.PendingFrames);
+        _buffer.ClearBuffer();
+        _processor.Reset();
+        _isDraining = false;
+        _isRebuffering = true;
     }
 
     private int ReadForRender(byte[] destination, int offset, int count)

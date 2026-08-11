@@ -367,7 +367,18 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
     public bool TrySetRate(float rate)
     {
         ThrowIfDisposed();
-        if (CurrentPath is null || !PlaybackRate.IsSupported(rate) || MediaPlayer.SetRate(rate) != 0)
+        if (CurrentPath is null || !PlaybackRate.IsSupported(rate))
+        {
+            return false;
+        }
+
+        if (PlaybackRate.AreEqual(_rate, rate))
+        {
+            return true;
+        }
+
+        _audioOutput.PrepareForRateChange();
+        if (MediaPlayer.SetRate(rate) != 0)
         {
             return false;
         }

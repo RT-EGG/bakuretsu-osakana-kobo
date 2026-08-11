@@ -1,9 +1,12 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using BakuretsuOsakanaKobo.Infrastructure.Diagnostics;
 using BakuretsuOsakanaKobo.Infrastructure.Errors;
@@ -27,6 +30,7 @@ internal static class Program
 
         var processClock = Stopwatch.StartNew();
         var validateProfiles = Environment.GetEnvironmentVariable("BOK_VIDEO_PROFILE_VALIDATION") == "1";
+        var validateGestures = Environment.GetEnvironmentVariable("BOK_GESTURE_VALIDATION") == "1";
         var profileFilePath = $"{Path.GetFullPath(args[1])}.video-profiles.json";
         VideoProfileRepository? videoProfiles = null;
         if (validateProfiles)
@@ -48,9 +52,10 @@ internal static class Program
         var backend = new LibVlcPlaybackBackend();
         backend.SetMuted(true);
         var notificationSink = new RecordingNotificationSink();
+        var diagnosticLog = new RecordingDiagnosticLog();
         window.ConfigureServices(
             new PortableDataPaths(AppContext.BaseDirectory),
-            new ErrorReporter(new NullDiagnosticLog(), notificationSink),
+            new ErrorReporter(diagnosticLog, notificationSink),
             backend,
             videoProfiles);
 
@@ -65,7 +70,8 @@ internal static class Program
                 var volumeSlider = (Slider)window.FindName("VolumeSlider");
                 var muteButton = (Button)window.FindName("MuteButton");
                 var volumeText = (TextBlock)window.FindName("VolumeText");
-                var videoSurface = (FrameworkElement)window.FindName("VideoSurface");
+                var videoSurface = (FrameworkElement)window.FindName("VideoInteractionSurface");
+                var videoRegion = (FrameworkElement)window.FindName("VideoSurface");
                 var playbackRateText = (TextBlock)window.FindName("PlaybackRateText");
                 Ensure(!volumeSlider.IsEnabled && !muteButton.IsEnabled, "Volume controls must start disabled.");
                 var openMetrics = await MeasureOpenAsync(window, seekSlider, backend, args[0]);
@@ -118,6 +124,13 @@ internal static class Program
                     videoSurface,
                     backend,
                     args[0]);
+                var temporaryPlaybackRateValidation = validateGestures
+                    ? await ValidateTemporaryPlaybackRateGestureAsync(
+                        window,
+                        videoRegion,
+                        videoSurface,
+                        backend)
+                    : null;
 
                 var volumeValidation = ValidateVolumeControls(
                     volumeSlider,
@@ -141,6 +154,7 @@ internal static class Program
                     seek90PercentMs = seek90Milliseconds,
                     lengthMilliseconds,
                     playbackRateValidation,
+                    temporaryPlaybackRateValidation,
                     volumeValidation,
                     audibleValidation,
                     audioDiagnostics = backend.AudioDiagnostics,
@@ -152,6 +166,12 @@ internal static class Program
             catch (Exception exception)
             {
                 Console.Error.WriteLine(exception);
+                foreach (var diagnosticEvent in diagnosticLog.Events)
+                {
+                    Console.Error.WriteLine(
+                        $"{diagnosticEvent.Severity} {diagnosticEvent.EventName}: " +
+                        $"{diagnosticEvent.Message} {diagnosticEvent.Exception}");
+                }
             }
             finally
             {
@@ -434,6 +454,156 @@ internal static class Program
         };
     }
 
+    private static async Task<object> ValidateTemporaryPlaybackRateGestureAsync(
+        MainWindow window,
+        FrameworkElement videoRegion,
+        FrameworkElement videoSurface,
+        LibVlcPlaybackBackend backend)
+    {
+        Ensure(backend.TrySetRate(0.5f), "Could not prepare 0.5x for temporary-rate validation.");
+        Ensure(backend.IsMuted, "Temporary-rate validation must remain muted.");
+        var contextMenu = videoSurface.ContextMenu ??
+            throw new InvalidOperationException("The video context menu was not found.");
+        var target = videoRegion.PointToScreen(
+            new Point(videoRegion.ActualWidth / 2, videoRegion.ActualHeight / 2));
+        Ensure(NativeMethods.GetCursorPos(out var originalCursor), "Could not read the current cursor position.");
+        var activationClock = new Stopwatch();
+
+        window.Topmost = true;
+        window.Activate();
+        NativeMethods.SetForegroundWindow(new WindowInteropHelper(window).Handle);
+        await Task.Delay(100);
+        try
+        {
+            MoveCursor(target);
+            activationClock.Start();
+            NativeMethods.MouseLeftDown();
+            await WaitUntilAsync(
+                () => window.IsTemporaryPlaybackRatePending,
+                TimeSpan.FromMilliseconds(200),
+                "The real left-button press did not reach the WPF video interaction surface.");
+            await Task.Delay(TimeSpan.FromMilliseconds(250));
+            Ensure(PlaybackRate.AreEqual(backend.Rate, 0.5f), "Temporary 2.0x activated before 400 ms.");
+            await WaitUntilAsync(
+                () => PlaybackRate.AreEqual(backend.Rate, 2.0f),
+                TimeSpan.FromSeconds(1),
+                "Holding the video surface did not activate temporary 2.0x playback.");
+            var activationMilliseconds = activationClock.Elapsed.TotalMilliseconds;
+            Ensure(activationMilliseconds >= 350, "Temporary 2.0x activated materially before 400 ms.");
+
+            MoveCursor(new Point(target.X + 40, target.Y + 40));
+            await Task.Delay(TimeSpan.FromSeconds(2.5));
+            Ensure(
+                PlaybackRate.AreEqual(backend.Rate, 2.0f),
+                "Movement after activation cancelled temporary 2.0x.");
+            Ensure(!backend.AudioDiagnostics.Failed, "Temporary 2.0x caused the PCM/WASAPI path to fail.");
+            Ensure(backend.AudioDiagnostics.OverflowCount == 0, "Temporary 2.0x overflowed the bounded PCM buffer.");
+            NativeMethods.MouseLeftUp();
+            await WaitUntilAsync(
+                () => PlaybackRate.AreEqual(backend.Rate, 0.5f),
+                TimeSpan.FromSeconds(1),
+                "Left-button release did not restore the pre-hold rate.");
+
+            MoveCursor(target);
+            NativeMethods.MouseLeftDown();
+            await Task.Delay(100);
+            MoveCursor(new Point(
+                target.X + SystemParameters.MinimumHorizontalDragDistance + 10,
+                target.Y));
+            await Task.Delay(TemporaryPlaybackRateGesture.HoldDuration + TimeSpan.FromMilliseconds(150));
+            Ensure(PlaybackRate.AreEqual(backend.Rate, 0.5f), "Pre-activation drag movement triggered temporary 2.0x.");
+            NativeMethods.MouseLeftUp();
+
+            MoveCursor(target);
+            NativeMethods.MouseLeftDown();
+            await Task.Delay(100);
+            NativeMethods.MouseLeftUp();
+            await Task.Delay(TemporaryPlaybackRateGesture.HoldDuration + TimeSpan.FromMilliseconds(100));
+            Ensure(PlaybackRate.AreEqual(backend.Rate, 0.5f), "A normal click triggered temporary 2.0x.");
+
+            NativeMethods.MouseLeftClick();
+            await Task.Delay(80);
+            NativeMethods.MouseLeftClick();
+            await Task.Delay(TemporaryPlaybackRateGesture.HoldDuration + TimeSpan.FromMilliseconds(100));
+            Ensure(PlaybackRate.AreEqual(backend.Rate, 0.5f), "A double click triggered temporary 2.0x.");
+
+            NativeMethods.MouseRightClick();
+            await WaitUntilAsync(
+                () => contextMenu.IsOpen,
+                TimeSpan.FromSeconds(1),
+                "A real right click did not open the video context menu.");
+            Ensure(PlaybackRate.AreEqual(backend.Rate, 0.5f), "A right click triggered temporary 2.0x.");
+            contextMenu.IsOpen = false;
+            await Task.Delay(250);
+            window.Activate();
+            NativeMethods.SetForegroundWindow(new WindowInteropHelper(window).Handle);
+
+            backend.SetVolumePercent(100);
+            NativeMethods.MouseWheel(120);
+            await WaitUntilAsync(
+                () => backend.VolumePercent == 105,
+                TimeSpan.FromSeconds(1),
+                "A real mouse-wheel notch did not reach the video interaction surface.");
+            NativeMethods.MouseWheel(-120);
+            await WaitUntilAsync(
+                () => backend.VolumePercent == 100,
+                TimeSpan.FromSeconds(1),
+                "A real reverse mouse-wheel notch did not restore the volume.");
+
+            MoveCursor(target);
+            NativeMethods.MouseLeftDown();
+            await WaitUntilAsync(
+                () => window.IsTemporaryPlaybackRatePending,
+                TimeSpan.FromMilliseconds(200),
+                "A left-button press after closing the context menu did not reach the video surface.");
+            await WaitUntilAsync(
+                () => PlaybackRate.AreEqual(backend.Rate, 2.0f),
+                TimeSpan.FromSeconds(1),
+                "Could not activate temporary 2.0x before focus-loss validation.");
+            NativeMethods.SendMessage(
+                new WindowInteropHelper(window).Handle,
+                NativeMethods.WindowMessageActivateApplication,
+                0,
+                0);
+            await WaitUntilAsync(
+                () => PlaybackRate.AreEqual(backend.Rate, 0.5f),
+                TimeSpan.FromSeconds(1),
+                "Window deactivation did not restore the pre-hold rate.");
+            NativeMethods.MouseLeftUp();
+            await Task.Delay(100);
+
+            Ensure(backend.TrySetRate(PlaybackRate.Default), "Could not restore 1.0x after gesture validation.");
+            return new
+            {
+                holdDurationMilliseconds = TemporaryPlaybackRateGesture.HoldDuration.TotalMilliseconds,
+                activationMilliseconds,
+                restoredRate = backend.Rate,
+                dragBeforeActivationCancelled = true,
+                movementAfterActivationPreserved = true,
+                normalClickIgnored = true,
+                doubleClickIgnored = true,
+                rightClickOpenedContextMenu = true,
+                realMouseWheelHandled = true,
+                focusLossRestored = true,
+                finalMuted = backend.IsMuted,
+            };
+        }
+        finally
+        {
+            NativeMethods.MouseLeftUp();
+            contextMenu.IsOpen = false;
+            NativeMethods.SetCursorPos(originalCursor.X, originalCursor.Y);
+            window.Topmost = false;
+        }
+    }
+
+    private static void MoveCursor(Point point)
+    {
+        Ensure(
+            NativeMethods.SetCursorPos((int)Math.Round(point.X), (int)Math.Round(point.Y)),
+            "Could not move the cursor for gesture validation.");
+    }
+
     private static void Ensure(bool condition, string message)
     {
         if (!condition)
@@ -533,9 +703,15 @@ internal static class Program
         resources["BorderBrush"] = new SolidColorBrush(Color.FromRgb(0x34, 0x41, 0x56));
     }
 
-    private sealed class NullDiagnosticLog : IDiagnosticLog
+    private sealed class RecordingDiagnosticLog : IDiagnosticLog
     {
-        public DiagnosticWriteResult Write(DiagnosticEvent diagnosticEvent) => new(true, null);
+        public ConcurrentQueue<DiagnosticEvent> Events { get; } = new();
+
+        public DiagnosticWriteResult Write(DiagnosticEvent diagnosticEvent)
+        {
+            Events.Enqueue(diagnosticEvent);
+            return new(true, null);
+        }
 
         public void Dispose()
         {
@@ -561,5 +737,59 @@ internal static class Program
         {
             Notifications.Add(notification);
         }
+    }
+
+    private static class NativeMethods
+    {
+        private const uint MouseEventLeftDown = 0x0002;
+        private const uint MouseEventLeftUp = 0x0004;
+        private const uint MouseEventRightDown = 0x0008;
+        private const uint MouseEventRightUp = 0x0010;
+        private const uint MouseEventWheel = 0x0800;
+        internal const int WindowMessageActivateApplication = 0x001C;
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool SetCursorPos(int x, int y);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool GetCursorPos(out NativePoint point);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool SetForegroundWindow(nint windowHandle);
+
+        [DllImport("user32.dll")]
+        internal static extern nint SendMessage(nint windowHandle, int message, nint wordParameter, nint longParameter);
+
+        [DllImport("user32.dll", EntryPoint = "mouse_event")]
+        private static extern void MouseEvent(uint flags, uint dx, uint dy, uint data, nuint extraInfo);
+
+        internal static void MouseLeftDown() => MouseEvent(MouseEventLeftDown, 0, 0, 0, 0);
+
+        internal static void MouseLeftUp() => MouseEvent(MouseEventLeftUp, 0, 0, 0, 0);
+
+        internal static void MouseLeftClick()
+        {
+            MouseLeftDown();
+            MouseLeftUp();
+        }
+
+        internal static void MouseRightClick()
+        {
+            MouseEvent(MouseEventRightDown, 0, 0, 0, 0);
+            MouseEvent(MouseEventRightUp, 0, 0, 0, 0);
+        }
+
+        internal static void MouseWheel(int delta) =>
+            MouseEvent(MouseEventWheel, 0, 0, unchecked((uint)delta), 0);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint
+    {
+        internal int X;
+        internal int Y;
     }
 }

@@ -36,37 +36,45 @@
 
         <Grid x:Name="VideoSurface"
               Grid.Row="1"
-              Background="Black"
-              PreviewMouseWheel="VideoSurface_OnPreviewMouseWheel">
-            <Grid.ContextMenu>
-                <ContextMenu x:Name="VideoContextMenu"
-                             Opened="VideoContextMenu_OnOpened">
-                    <MenuItem x:Name="PlaybackRateMenuItem" Header="再生速度">
-                        <MenuItem Header="0.25×" Tag="0.25" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
-                        <MenuItem Header="0.5×" Tag="0.5" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
-                        <MenuItem Header="1.0×" Tag="1.0" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
-                        <MenuItem Header="1.5×" Tag="1.5" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
-                        <MenuItem Header="2.0×" Tag="2.0" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
-                    </MenuItem>
-                </ContextMenu>
-            </Grid.ContextMenu>
+              Background="Black">
             <vlc:VideoView x:Name="VideoView"
                            HorizontalContentAlignment="Stretch"
                            VerticalContentAlignment="Stretch">
-                <StackPanel x:Name="EmptyStatePanel"
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Center">
-                    <TextBlock x:Name="EmptyStateTitleText"
-                               HorizontalAlignment="Center"
-                               FontSize="20"
-                               FontWeight="SemiBold"
-                               Text="動画が選択されていません" />
-                    <TextBlock x:Name="EmptyStateDescriptionText"
-                               Margin="0,10,0,0"
-                               HorizontalAlignment="Center"
-                               Foreground="{StaticResource MutedTextBrush}"
-                               Text="「ファイル」→「開く」からmp4またはwmvを選択してください" />
-                </StackPanel>
+                <Grid x:Name="VideoInteractionSurface"
+                      Background="#01000000"
+                      Focusable="True"
+                      PreviewMouseWheel="VideoSurface_OnPreviewMouseWheel"
+                      PreviewMouseLeftButtonDown="VideoSurface_OnPreviewMouseLeftButtonDown"
+                      PreviewMouseLeftButtonUp="VideoSurface_OnPreviewMouseLeftButtonUp"
+                      PreviewMouseMove="VideoSurface_OnPreviewMouseMove"
+                      LostMouseCapture="VideoSurface_OnLostMouseCapture">
+                    <Grid.ContextMenu>
+                        <ContextMenu x:Name="VideoContextMenu"
+                                     Opened="VideoContextMenu_OnOpened">
+                            <MenuItem x:Name="PlaybackRateMenuItem" Header="再生速度">
+                                <MenuItem Header="0.25×" Tag="0.25" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
+                                <MenuItem Header="0.5×" Tag="0.5" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
+                                <MenuItem Header="1.0×" Tag="1.0" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
+                                <MenuItem Header="1.5×" Tag="1.5" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
+                                <MenuItem Header="2.0×" Tag="2.0" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
+                            </MenuItem>
+                        </ContextMenu>
+                    </Grid.ContextMenu>
+                    <StackPanel x:Name="EmptyStatePanel"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center">
+                        <TextBlock x:Name="EmptyStateTitleText"
+                                   HorizontalAlignment="Center"
+                                   FontSize="20"
+                                   FontWeight="SemiBold"
+                                   Text="動画が選択されていません" />
+                        <TextBlock x:Name="EmptyStateDescriptionText"
+                                   Margin="0,10,0,0"
+                                   HorizontalAlignment="Center"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   Text="「ファイル」→「開く」からmp4またはwmvを選択してください" />
+                    </StackPanel>
+                </Grid>
             </vlc:VideoView>
         </Grid>
 

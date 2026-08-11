@@ -54,4 +54,17 @@ public sealed class PlaybackRateTests
     {
         Assert.Equal(expected, PlaybackRate.Format(rate));
     }
+
+    [Theory]
+    [InlineData(0.25f, -1, 0.25f)]
+    [InlineData(0.25f, 1, 0.5f)]
+    [InlineData(1.0f, -1, 0.5f)]
+    [InlineData(1.0f, 1, 1.5f)]
+    [InlineData(2.0f, 1, 2.0f)]
+    [InlineData(1.5f, 0, 1.5f)]
+    [InlineData(0.75f, 1, 1.0f)]
+    public void Step_MovesOneDefinedRateAndClamps(float current, int direction, float expected)
+    {
+        Assert.Equal(expected, PlaybackRate.Step(current, direction));
+    }
 }

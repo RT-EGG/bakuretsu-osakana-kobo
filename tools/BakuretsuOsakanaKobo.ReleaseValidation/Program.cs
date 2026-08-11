@@ -32,6 +32,7 @@ internal static class Program
         var validateProfiles = Environment.GetEnvironmentVariable("BOK_VIDEO_PROFILE_VALIDATION") == "1";
         var validateGestures = Environment.GetEnvironmentVariable("BOK_GESTURE_VALIDATION") == "1";
         var validateFullscreen = Environment.GetEnvironmentVariable("BOK_FULLSCREEN_VALIDATION") == "1";
+        var validateShortcuts = Environment.GetEnvironmentVariable("BOK_SHORTCUT_VALIDATION") == "1";
         var profileFilePath = $"{Path.GetFullPath(args[1])}.video-profiles.json";
         VideoProfileRepository? videoProfiles = null;
         if (validateProfiles)
@@ -125,6 +126,15 @@ internal static class Program
                     videoSurface,
                     backend,
                     args[0]);
+                var shortcutValidation = validateShortcuts
+                    ? await ValidatePlaybackShortcutsAsync(
+                        window,
+                        videoSurface,
+                        seekSlider,
+                        volumeSlider,
+                        playbackRateText,
+                        backend)
+                    : null;
                 var fullscreenValidation = validateFullscreen
                     ? await ValidateFullscreenAsync(window, videoRegion, videoSurface, volumeSlider, backend)
                     : null;
@@ -158,6 +168,7 @@ internal static class Program
                     seek90PercentMs = seek90Milliseconds,
                     lengthMilliseconds,
                     playbackRateValidation,
+                    shortcutValidation,
                     fullscreenValidation,
                     temporaryPlaybackRateValidation,
                     volumeValidation,
@@ -457,6 +468,134 @@ internal static class Program
             finalDisplay = playbackRateText.Text,
             finalMuted = backend.IsMuted,
         };
+    }
+
+    private static async Task<object> ValidatePlaybackShortcutsAsync(
+        MainWindow window,
+        FrameworkElement videoSurface,
+        Slider seekSlider,
+        Slider volumeSlider,
+        TextBlock playbackRateText,
+        LibVlcPlaybackBackend backend)
+    {
+        Ensure(backend.IsMuted, "Shortcut validation must remain muted.");
+        Ensure(NativeMethods.GetCursorPos(out var originalCursor), "Could not read the cursor position.");
+        window.Topmost = true;
+        window.Activate();
+        NativeMethods.SetForegroundWindow(new WindowInteropHelper(window).Handle);
+
+        try
+        {
+            MoveCursor(videoSurface.PointToScreen(
+                new Point(videoSurface.ActualWidth / 2, videoSurface.ActualHeight / 2)));
+            NativeMethods.MouseLeftClick();
+            await WaitUntilAsync(
+                () => ReferenceEquals(Keyboard.FocusedElement, videoSurface),
+                TimeSpan.FromSeconds(1),
+                "A real click did not focus the video surface for shortcut validation.");
+
+            backend.Play();
+            await WaitUntilAsync(
+                () => backend.IsPlaying,
+                TimeSpan.FromSeconds(3),
+                "Playback did not start before Space shortcut validation.");
+
+            NativeMethods.PressKey(NativeMethods.VirtualKeySpace);
+            await WaitUntilAsync(
+                () => !backend.IsPlaying,
+                TimeSpan.FromSeconds(3),
+                "Space did not pause playback.");
+            NativeMethods.PressKey(NativeMethods.VirtualKeySpace);
+            await WaitUntilAsync(
+                () => backend.IsPlaying,
+                TimeSpan.FromSeconds(3),
+                "Space did not resume playback.");
+            NativeMethods.PressKey(NativeMethods.VirtualKeySpace);
+            await WaitUntilAsync(
+                () => !backend.IsPlaying,
+                TimeSpan.FromSeconds(3),
+                "Space did not pause playback before seek validation.");
+
+            seekSlider.Value = 0.5;
+            await WaitUntilAsync(
+                () => Math.Abs(backend.TimeMilliseconds - (backend.LengthMilliseconds * 0.5)) <= 250,
+                TimeSpan.FromSeconds(3),
+                "Could not prepare the timeline for arrow-key validation.");
+
+            var beforeLeftMilliseconds = backend.TimeMilliseconds;
+            var expectedLeftMilliseconds = Math.Max(0, beforeLeftMilliseconds - 5_000);
+            NativeMethods.PressKey(NativeMethods.VirtualKeyLeft);
+            await WaitUntilAsync(
+                () => Math.Abs(backend.TimeMilliseconds - expectedLeftMilliseconds) <= 250,
+                TimeSpan.FromSeconds(3),
+                "Left did not seek backward by five seconds.");
+
+            var beforeRightMilliseconds = backend.TimeMilliseconds;
+            var expectedRightMilliseconds = Math.Min(backend.LengthMilliseconds, beforeRightMilliseconds + 5_000);
+            NativeMethods.PressKey(NativeMethods.VirtualKeyRight);
+            await WaitUntilAsync(
+                () => Math.Abs(backend.TimeMilliseconds - expectedRightMilliseconds) <= 250,
+                TimeSpan.FromSeconds(3),
+                "Right did not seek forward by five seconds.");
+
+            Ensure(backend.TrySetRate(PlaybackRate.Default), "Could not prepare 1.0x for arrow-key validation.");
+            NativeMethods.PressKey(NativeMethods.VirtualKeyUp);
+            await WaitUntilAsync(
+                () => PlaybackRate.AreEqual(backend.Rate, 1.5f) && playbackRateText.Text == "1.5×",
+                TimeSpan.FromSeconds(3),
+                "Up did not increase the playback rate to 1.5x.");
+            NativeMethods.PressKey(NativeMethods.VirtualKeyUp);
+            await WaitUntilAsync(
+                () => PlaybackRate.AreEqual(backend.Rate, 2.0f) && playbackRateText.Text == "2.0×",
+                TimeSpan.FromSeconds(3),
+                "Up did not increase the playback rate to 2.0x.");
+            NativeMethods.PressKey(NativeMethods.VirtualKeyUp);
+            await Task.Delay(100);
+            Ensure(PlaybackRate.AreEqual(backend.Rate, 2.0f), "Up exceeded the maximum playback rate.");
+            NativeMethods.PressKey(NativeMethods.VirtualKeyDown);
+            await WaitUntilAsync(
+                () => PlaybackRate.AreEqual(backend.Rate, 1.5f) && playbackRateText.Text == "1.5×",
+                TimeSpan.FromSeconds(3),
+                "Down did not decrease the playback rate to 1.5x.");
+            NativeMethods.PressKey(NativeMethods.VirtualKeyUp);
+            await WaitUntilAsync(
+                () => PlaybackRate.AreEqual(backend.Rate, 2.0f),
+                TimeSpan.FromSeconds(3),
+                "Up did not restore the playback rate to 2.0x.");
+
+            volumeSlider.Value = 100;
+            Ensure(volumeSlider.Focus(), "Could not focus the volume slider for focus-priority validation.");
+            NativeMethods.PressKey(NativeMethods.VirtualKeyUp);
+            await WaitUntilAsync(
+                () => backend.VolumePercent == 101,
+                TimeSpan.FromSeconds(3),
+                "Up did not retain the volume slider's standard behavior while it had focus.");
+            Ensure(
+                PlaybackRate.AreEqual(backend.Rate, 2.0f),
+                "A playback shortcut overrode the focused volume slider.");
+
+            Ensure(videoSurface.Focus(), "Could not restore video-surface focus after shortcut validation.");
+            Ensure(backend.TrySetRate(PlaybackRate.Default), "Could not restore 1.0x after shortcut validation.");
+            backend.Play();
+
+            return new
+            {
+                playPauseToggles = 3,
+                seekStepSeconds = 5,
+                leftTargetMilliseconds = expectedLeftMilliseconds,
+                rightTargetMilliseconds = expectedRightMilliseconds,
+                maximumRate = 2.0,
+                focusedVolumePercent = backend.VolumePercent,
+                focusedSliderKeptRate = 2.0,
+                finalRate = backend.Rate,
+                finalMuted = backend.IsMuted,
+            };
+        }
+        finally
+        {
+            NativeMethods.SetCursorPos(originalCursor.X, originalCursor.Y);
+            window.Topmost = false;
+        }
     }
 
     private static async Task<object> ValidateTemporaryPlaybackRateGestureAsync(
@@ -1136,6 +1275,11 @@ internal static class Program
         private const byte VirtualKeyMenu = 0x12;
         private const byte VirtualKeyReturn = 0x0D;
         internal const byte VirtualKeyEscape = 0x1B;
+        internal const byte VirtualKeySpace = 0x20;
+        internal const byte VirtualKeyLeft = 0x25;
+        internal const byte VirtualKeyUp = 0x26;
+        internal const byte VirtualKeyRight = 0x27;
+        internal const byte VirtualKeyDown = 0x28;
         internal const uint MonitorDefaultToNearest = 0x00000002;
         internal const int WindowMessageActivateApplication = 0x001C;
 

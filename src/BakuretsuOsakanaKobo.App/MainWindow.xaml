@@ -45,6 +45,7 @@
                 <Grid x:Name="VideoInteractionSurface"
                       Background="#01000000"
                       Focusable="True"
+                      PreviewKeyDown="Window_OnPreviewKeyDown"
                       PreviewMouseWheel="VideoSurface_OnPreviewMouseWheel"
                       PreviewMouseLeftButtonDown="VideoSurface_OnPreviewMouseLeftButtonDown"
                       PreviewMouseLeftButtonUp="VideoSurface_OnPreviewMouseLeftButtonUp"
@@ -92,6 +93,7 @@
                 Background="{StaticResource PanelBrush}"
                 BorderBrush="{StaticResource BorderBrush}"
                 BorderThickness="0,1,0,0"
+                PreviewKeyDown="Window_OnPreviewKeyDown"
                 MouseEnter="PlaybackControls_OnMouseEnter"
                 MouseLeave="PlaybackControls_OnMouseLeave">
             <Grid>

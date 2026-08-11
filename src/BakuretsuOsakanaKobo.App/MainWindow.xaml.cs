@@ -291,6 +291,11 @@ public partial class MainWindow : Window
 
     private void PlayPauseButton_OnClick(object sender, RoutedEventArgs e)
     {
+        TogglePlayPause();
+    }
+
+    private void TogglePlayPause()
+    {
         if (_playbackBackend?.CurrentPath is null || _openTask is not null)
         {
             return;
@@ -612,7 +617,7 @@ public partial class MainWindow : Window
         if (eventArgs.ClickCount >= 2)
         {
             EndTemporaryPlaybackRateGesture();
-            if (CanControlPlaybackRate() && !HasInputAncestor(eventArgs.OriginalSource as DependencyObject))
+            if (CanControlPlayback() && !HasInputAncestor(eventArgs.OriginalSource as DependencyObject))
             {
                 ToggleFullscreen();
                 eventArgs.Handled = true;
@@ -621,7 +626,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!CanControlPlaybackRate() || HasInputAncestor(eventArgs.OriginalSource as DependencyObject))
+        if (!CanControlPlayback() || HasInputAncestor(eventArgs.OriginalSource as DependencyObject))
         {
             return;
         }
@@ -682,7 +687,7 @@ public partial class MainWindow : Window
         var backend = _playbackBackend;
         if (backend is null ||
             !_temporaryPlaybackRateGesture.TryActivate(
-                Mouse.LeftButton == MouseButtonState.Pressed && CanControlPlaybackRate(),
+                Mouse.LeftButton == MouseButtonState.Pressed && CanControlPlayback(),
                 backend.Rate))
         {
             EndTemporaryPlaybackRateGesture();
@@ -773,6 +778,9 @@ public partial class MainWindow : Window
             ? System.Windows.Media.VisualTreeHelper.GetParent(current)
             : LogicalTreeHelper.GetParent(current);
 
+    private static bool IsShortcutInputFocused() =>
+        Keyboard.FocusedElement is DependencyObject focusedElement && HasInputAncestor(focusedElement);
+
     private void VideoContextMenu_OnOpened(object sender, RoutedEventArgs eventArgs)
     {
         UpdateFullscreenControlsInteraction(isContextMenuOpen: true);
@@ -802,17 +810,107 @@ public partial class MainWindow : Window
     private void Window_OnPreviewKeyDown(object sender, KeyEventArgs eventArgs)
     {
         var key = eventArgs.Key == Key.System ? eventArgs.SystemKey : eventArgs.Key;
-        switch (FullscreenShortcutMap.Resolve(key, Keyboard.Modifiers, _isFullscreen))
+        var action = PlaybackShortcutMap.Resolve(key, Keyboard.Modifiers, _isFullscreen);
+        if (action == PlaybackShortcutAction.None)
         {
-            case FullscreenShortcutAction.Toggle:
-                ToggleFullscreen();
-                eventArgs.Handled = true;
+            return;
+        }
+
+        if (action == PlaybackShortcutAction.ToggleFullscreen)
+        {
+            ToggleFullscreen();
+            eventArgs.Handled = true;
+            return;
+        }
+
+        if (action == PlaybackShortcutAction.ExitFullscreen)
+        {
+            ExitFullscreen();
+            eventArgs.Handled = true;
+            return;
+        }
+
+        if (IsShortcutInputFocused() || !CanControlPlayback())
+        {
+            return;
+        }
+
+        switch (action)
+        {
+            case PlaybackShortcutAction.TogglePlayPause:
+                TogglePlayPause();
                 break;
-            case FullscreenShortcutAction.Exit:
-                ExitFullscreen();
-                eventArgs.Handled = true;
+            case PlaybackShortcutAction.SeekBackward:
+                SeekByShortcut(-PlaybackShortcutMap.SeekStep);
+                break;
+            case PlaybackShortcutAction.SeekForward:
+                SeekByShortcut(PlaybackShortcutMap.SeekStep);
+                break;
+            case PlaybackShortcutAction.IncreasePlaybackRate:
+                StepPlaybackRate(1);
+                break;
+            case PlaybackShortcutAction.DecreasePlaybackRate:
+                StepPlaybackRate(-1);
                 break;
         }
+
+        eventArgs.Handled = true;
+    }
+
+    private void SeekByShortcut(TimeSpan offset)
+    {
+        var backend = _playbackBackend;
+        if (backend is null || !backend.IsSeekable || backend.LengthMilliseconds <= 0)
+        {
+            return;
+        }
+
+        var normalizedPosition = PlaybackPosition.OffsetByMilliseconds(
+            backend.TimeMilliseconds,
+            backend.LengthMilliseconds,
+            (long)offset.TotalMilliseconds);
+        backend.Seek(normalizedPosition);
+        PresentRequestedSeek(normalizedPosition, backend.LengthMilliseconds);
+    }
+
+    private void PresentRequestedSeek(double normalizedPosition, long lengthMilliseconds)
+    {
+        _seekPresentationHoldUntilUtc = DateTime.UtcNow + PlaybackTimelineRefreshInterval;
+        _isUpdatingSeekSlider = true;
+        try
+        {
+            SeekSlider.Value = normalizedPosition;
+        }
+        finally
+        {
+            _isUpdatingSeekSlider = false;
+        }
+
+        var previewMilliseconds = (long)(normalizedPosition * lengthMilliseconds);
+        TimeText.Text =
+            $"{PlaybackTimelinePresentation.FormatMilliseconds(previewMilliseconds)} / " +
+            PlaybackTimelinePresentation.FormatMilliseconds(lengthMilliseconds);
+    }
+
+    private void StepPlaybackRate(int direction)
+    {
+        EndTemporaryPlaybackRateGesture();
+        var backend = _playbackBackend;
+        if (backend is null)
+        {
+            return;
+        }
+
+        var targetRate = PlaybackRate.Step(backend.Rate, direction);
+        if (!backend.TrySetRate(targetRate))
+        {
+            ReportPlaybackRateFailure(
+                "playback-shortcut-rate-change-rejected",
+                "再生速度を変更できませんでした。",
+                $"The playback backend rejected shortcut rate {targetRate}.");
+        }
+
+        UpdatePlaybackRateControls();
     }
 
     private void ToggleFullscreen()
@@ -993,7 +1091,7 @@ public partial class MainWindow : Window
         PlaybackRateText.Text = formattedRate;
         AutomationProperties.SetName(PlaybackRateText, $"現在の再生速度 {formattedRate}");
         PlaybackRateMenuItem.IsEnabled =
-            CanControlPlaybackRate() &&
+            CanControlPlayback() &&
             !_temporaryPlaybackRateGesture.IsPending &&
             !_temporaryPlaybackRateGesture.IsActive;
 
@@ -1006,7 +1104,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private bool CanControlPlaybackRate() =>
+    private bool CanControlPlayback() =>
         _playbackBackend?.CurrentPath is not null &&
         _openTask is null &&
         !_isOpeningVideo &&
@@ -1157,15 +1255,10 @@ public partial class MainWindow : Window
 
         var normalizedPosition = PlaybackPosition.Normalize(eventArgs.NewValue);
         backend.Seek(normalizedPosition);
-        _seekPresentationHoldUntilUtc = DateTime.UtcNow + PlaybackTimelineRefreshInterval;
-
         var lengthMilliseconds = backend.LengthMilliseconds;
         if (lengthMilliseconds > 0)
         {
-            var previewMilliseconds = (long)(normalizedPosition * lengthMilliseconds);
-            TimeText.Text =
-                $"{PlaybackTimelinePresentation.FormatMilliseconds(previewMilliseconds)} / " +
-                PlaybackTimelinePresentation.FormatMilliseconds(lengthMilliseconds);
+            PresentRequestedSeek(normalizedPosition, lengthMilliseconds);
         }
     }
 

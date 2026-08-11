@@ -30,5 +30,26 @@ public static class PlaybackRate
             ? $"{rate.ToString("0.0#", CultureInfo.InvariantCulture)}×"
             : $"{Default.ToString("0.0", CultureInfo.InvariantCulture)}×";
 
+    public static float Step(float currentRate, int direction)
+    {
+        var currentIndex = -1;
+        for (var index = 0; index < Supported.Count; index++)
+        {
+            if (AreEqual(Supported[index], currentRate))
+            {
+                currentIndex = index;
+                break;
+            }
+        }
+
+        if (currentIndex < 0)
+        {
+            return Default;
+        }
+
+        var targetIndex = Math.Clamp(currentIndex + Math.Sign(direction), 0, Supported.Count - 1);
+        return Supported[targetIndex];
+    }
+
     public static bool AreEqual(float left, float right) => Math.Abs(left - right) < 0.001f;
 }

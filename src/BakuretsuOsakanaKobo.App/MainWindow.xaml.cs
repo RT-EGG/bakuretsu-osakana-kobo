@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Threading;
@@ -83,6 +84,7 @@ public partial class MainWindow : Window
         UpdatePlaybackButton();
         UpdatePlaybackTimeline();
         UpdateVolumeControls();
+        UpdatePlaybackRateControls();
     }
 
     internal void ShowNotification(UserNotification notification)
@@ -146,6 +148,7 @@ public partial class MainWindow : Window
         UpdatePlaybackButton();
         UpdatePlaybackTimeline();
         UpdateVolumeControls();
+        UpdatePlaybackRateControls();
         _openTask = OpenVideoAsync(dialog.FileName);
         try
         {
@@ -160,6 +163,7 @@ public partial class MainWindow : Window
                 UpdatePlaybackButton();
                 UpdatePlaybackTimeline();
                 UpdateVolumeControls();
+                UpdatePlaybackRateControls();
             }
         }
     }
@@ -238,6 +242,7 @@ public partial class MainWindow : Window
                 UpdatePlaybackButton();
                 UpdatePlaybackTimeline();
                 UpdateVolumeControls();
+                UpdatePlaybackRateControls();
             }
         }
     }
@@ -270,6 +275,7 @@ public partial class MainWindow : Window
                     UpdatePlaybackButton();
                     UpdatePlaybackTimeline();
                     UpdateVolumeControls();
+                    UpdatePlaybackRateControls();
                 });
             }
             catch (InvalidOperationException)
@@ -283,6 +289,7 @@ public partial class MainWindow : Window
         UpdatePlaybackButton();
         UpdatePlaybackTimeline();
         UpdateVolumeControls();
+        UpdatePlaybackRateControls();
     }
 
     private void PlaybackBackend_OnErrorOccurred(object? sender, PlaybackErrorEventArgs eventArgs)
@@ -310,6 +317,7 @@ public partial class MainWindow : Window
         {
             _hasPlaybackError = true;
             UpdateVolumeControls();
+            UpdatePlaybackRateControls();
         }
 
         _errorReporter.Report(
@@ -336,6 +344,8 @@ public partial class MainWindow : Window
                 SeekSlider.IsEnabled = false;
                 VolumeSlider.IsEnabled = false;
                 MuteButton.IsEnabled = false;
+                PlaybackRateMenuItem.IsEnabled = false;
+                VideoContextMenu.IsOpen = false;
                 _openCancellation?.Cancel();
                 _videoProfileSaveTimer.Stop();
                 _ = CloseAfterPendingWorkCompletesAsync(_openTask);
@@ -543,6 +553,64 @@ public partial class MainWindow : Window
         UpdateVolumeControls();
         CaptureCurrentVideoProfile(scheduleSave: true);
         eventArgs.Handled = true;
+    }
+
+    private void VideoContextMenu_OnOpened(object sender, RoutedEventArgs eventArgs) =>
+        UpdatePlaybackRateControls();
+
+    private void PlaybackRateMenuItem_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        var backend = _playbackBackend;
+        if (sender is not MenuItem { Tag: string rateText } ||
+            !PlaybackRateMenuItem.IsEnabled ||
+            backend is null ||
+            !PlaybackRate.TryParse(rateText, out var rate))
+        {
+            return;
+        }
+
+        if (!backend.TrySetRate(rate))
+        {
+            _errorReporter?.Report(
+                new UserNotification(
+                    UserNotificationSeverity.Warning,
+                    "再生速度を変更できませんでした。",
+                    "動画を開き直して、もう一度お試しください。"),
+                "playback-rate-change-rejected",
+                $"The playback backend rejected rate {rateText}.",
+                targetPath: backend.CurrentPath);
+        }
+
+        UpdatePlaybackRateControls();
+        eventArgs.Handled = true;
+    }
+
+    private void UpdatePlaybackRateControls()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        var backend = _playbackBackend;
+        var currentRate = backend?.Rate ?? PlaybackRate.Default;
+        var formattedRate = PlaybackRate.Format(currentRate);
+        PlaybackRateText.Text = formattedRate;
+        AutomationProperties.SetName(PlaybackRateText, $"現在の再生速度 {formattedRate}");
+        PlaybackRateMenuItem.IsEnabled =
+            backend?.CurrentPath is not null &&
+            _openTask is null &&
+            !_isOpeningVideo &&
+            !_hasPlaybackError &&
+            !_closeRequested;
+
+        foreach (var item in PlaybackRateMenuItem.Items.OfType<MenuItem>())
+        {
+            item.IsChecked =
+                item.Tag is string rateText &&
+                PlaybackRate.TryParse(rateText, out var itemRate) &&
+                PlaybackRate.AreEqual(itemRate, currentRate);
+        }
     }
 
     private PlaybackAudioState? GetInitialAudioState(string path)

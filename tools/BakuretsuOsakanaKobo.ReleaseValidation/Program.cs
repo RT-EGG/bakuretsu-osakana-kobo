@@ -65,7 +65,8 @@ internal static class Program
                 var volumeSlider = (Slider)window.FindName("VolumeSlider");
                 var muteButton = (Button)window.FindName("MuteButton");
                 var volumeText = (TextBlock)window.FindName("VolumeText");
-                var videoSurface = (UIElement)window.FindName("VideoSurface");
+                var videoSurface = (FrameworkElement)window.FindName("VideoSurface");
+                var playbackRateText = (TextBlock)window.FindName("PlaybackRateText");
                 Ensure(!volumeSlider.IsEnabled && !muteButton.IsEnabled, "Volume controls must start disabled.");
                 var openMetrics = await MeasureOpenAsync(window, seekSlider, backend, args[0]);
                 var lengthMilliseconds = backend.LengthMilliseconds;
@@ -111,6 +112,13 @@ internal static class Program
                     normalizedPosition: 0.9,
                     lengthMilliseconds);
 
+                var playbackRateValidation = await ValidatePlaybackRateAsync(
+                    window,
+                    playbackRateText,
+                    videoSurface,
+                    backend,
+                    args[0]);
+
                 var volumeValidation = ValidateVolumeControls(
                     volumeSlider,
                     muteButton,
@@ -132,6 +140,7 @@ internal static class Program
                     seek50PercentMs = seek50Milliseconds,
                     seek90PercentMs = seek90Milliseconds,
                     lengthMilliseconds,
+                    playbackRateValidation,
                     volumeValidation,
                     audibleValidation,
                     audioDiagnostics = backend.AudioDiagnostics,
@@ -312,9 +321,17 @@ internal static class Program
         Ensure(volumeSlider.IsEnabled && muteButton.IsEnabled, "Volume controls did not become enabled.");
         Ensure(backend.IsMuted, "Validation playback must remain muted.");
 
-        volumeSlider.Value = 65;
-        Ensure(backend.VolumePercent == 65, "The slider did not update backend volume to 65%.");
-        Ensure(volumeText.Text == "65%", "The volume label did not update to 65%.");
+        var requestMilliseconds = new List<double>();
+        foreach (var percent in new[] { 65, 110, 250, 495, 320 })
+        {
+            var clock = Stopwatch.StartNew();
+            volumeSlider.Value = percent;
+            Ensure(backend.VolumePercent == percent, $"The slider did not update backend volume to {percent}%.");
+            requestMilliseconds.Add(clock.Elapsed.TotalMilliseconds);
+        }
+
+        Ensure(volumeText.Text == "320%", "The volume label did not update to 320%.");
+        Ensure(requestMilliseconds.Max() <= 100, "A volume request took longer than 100 ms to reach the backend.");
 
         backend.Pause();
         muteButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -346,11 +363,73 @@ internal static class Program
 
         return new
         {
-            sliderPercent = 65,
+            requestRuns = requestMilliseconds.Count,
+            requestMilliseconds,
+            maximumRequestMilliseconds = requestMilliseconds.Max(),
             muteToggle = true,
             wheelStepPercent = PlaybackVolume.WheelStepPercent,
             maximumPercent = PlaybackVolume.MaximumPercent,
             finalPercent = backend.VolumePercent,
+            finalMuted = backend.IsMuted,
+        };
+    }
+
+    private static async Task<object> ValidatePlaybackRateAsync(
+        MainWindow window,
+        TextBlock playbackRateText,
+        FrameworkElement videoSurface,
+        LibVlcPlaybackBackend backend,
+        string path)
+    {
+        var contextMenu = videoSurface.ContextMenu ??
+            throw new InvalidOperationException("The video context menu was not found.");
+        var rateMenu = contextMenu.Items
+            .OfType<MenuItem>()
+            .Single(item => Equals(item.Header, "再生速度"));
+        var rateItems = rateMenu.Items.OfType<MenuItem>().ToArray();
+        Ensure(rateMenu.IsEnabled, "The playback-rate menu did not become enabled.");
+        Ensure(PlaybackRate.AreEqual(backend.Rate, PlaybackRate.Default), "Playback did not start at 1.0x.");
+        Ensure(playbackRateText.Text == "1.0×", "The playback-rate label did not start at 1.0x.");
+
+        contextMenu.PlacementTarget = videoSurface;
+        contextMenu.IsOpen = true;
+        Ensure(
+            rateItems.Single(item => Equals(item.Tag, "1.0")).IsChecked,
+            "The context menu did not check the current 1.0x rate.");
+        contextMenu.IsOpen = false;
+
+        var requestMilliseconds = new List<double>();
+        foreach (var rate in PlaybackRate.Supported)
+        {
+            var item = rateItems.Single(candidate =>
+                candidate.Tag is string text &&
+                PlaybackRate.TryParse(text, out var candidateRate) &&
+                PlaybackRate.AreEqual(candidateRate, rate));
+            var clock = Stopwatch.StartNew();
+            item.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            Ensure(PlaybackRate.AreEqual(backend.Rate, rate), $"The {rate}x request did not reach the backend.");
+            requestMilliseconds.Add(clock.Elapsed.TotalMilliseconds);
+            Ensure(item.IsChecked, $"The context menu did not check the current {rate}x rate.");
+            Ensure(playbackRateText.Text == PlaybackRate.Format(rate), $"The playback-rate label did not show {rate}x.");
+        }
+
+        Ensure(requestMilliseconds.Max() <= 100, "A playback-rate request took longer than 100 ms to reach the backend.");
+        await window.OpenVideoAsync(path);
+        Ensure(PlaybackRate.AreEqual(backend.Rate, PlaybackRate.Default), "Opening a new video did not reset the rate to 1.0x.");
+        Ensure(playbackRateText.Text == "1.0×", "The playback-rate label did not reset to 1.0x.");
+        Ensure(
+            rateItems.Single(item => Equals(item.Tag, "1.0")).IsChecked,
+            "The context menu did not restore the 1.0x check after opening a video.");
+        Ensure(backend.IsMuted, "Playback-rate validation must remain muted.");
+
+        return new
+        {
+            supportedRates = PlaybackRate.Supported,
+            requestRuns = requestMilliseconds.Count,
+            requestMilliseconds,
+            maximumRequestMilliseconds = requestMilliseconds.Max(),
+            resetOnOpen = backend.Rate,
+            finalDisplay = playbackRateText.Text,
             finalMuted = backend.IsMuted,
         };
     }

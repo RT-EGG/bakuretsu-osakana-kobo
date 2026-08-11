@@ -18,6 +18,8 @@ public interface IPlaybackBackend : IDisposable
 
     bool IsMuted { get; }
 
+    float Rate { get; }
+
     string? CurrentPath { get; }
 
     Task<bool> OpenAndPlayAsync(
@@ -36,4 +38,6 @@ public interface IPlaybackBackend : IDisposable
     void SetVolumePercent(int volumePercent);
 
     void SetMuted(bool isMuted);
+
+    bool TrySetRate(float rate);
 }

@@ -38,6 +38,18 @@
               Grid.Row="1"
               Background="Black"
               PreviewMouseWheel="VideoSurface_OnPreviewMouseWheel">
+            <Grid.ContextMenu>
+                <ContextMenu x:Name="VideoContextMenu"
+                             Opened="VideoContextMenu_OnOpened">
+                    <MenuItem x:Name="PlaybackRateMenuItem" Header="再生速度">
+                        <MenuItem Header="0.25×" Tag="0.25" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
+                        <MenuItem Header="0.5×" Tag="0.5" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
+                        <MenuItem Header="1.0×" Tag="1.0" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
+                        <MenuItem Header="1.5×" Tag="1.5" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
+                        <MenuItem Header="2.0×" Tag="2.0" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
+                    </MenuItem>
+                </ContextMenu>
+            </Grid.ContextMenu>
             <vlc:VideoView x:Name="VideoView"
                            HorizontalContentAlignment="Stretch"
                            VerticalContentAlignment="Stretch">
@@ -71,6 +83,7 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="96" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
@@ -147,6 +160,25 @@
                            FontSize="13"
                            Text="100%"
                            AutomationProperties.Name="音量 100%" />
+                <Border Grid.Column="6"
+                        MinWidth="48"
+                        Height="28"
+                        Margin="10,0,0,0"
+                        Padding="7,0"
+                        VerticalAlignment="Center"
+                        Background="{StaticResource AppBackgroundBrush}"
+                        BorderBrush="{StaticResource BorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="5"
+                        ToolTip="現在の再生速度">
+                    <TextBlock x:Name="PlaybackRateText"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               FontFamily="Cascadia Mono, Consolas"
+                               FontSize="13"
+                               Text="1.0×"
+                               AutomationProperties.Name="現在の再生速度 1.0倍" />
+                </Border>
             </Grid>
         </Border>
 

@@ -19,6 +19,8 @@ public sealed class PlaybackBackendContractTests
 
         Assert.Equal(65, backend.VolumePercent);
         Assert.True(backend.IsMuted);
+        Assert.True(backend.TrySetRate(1.5f));
+        Assert.Equal(1.5f, backend.Rate);
 
         backend.Pause();
 
@@ -39,15 +41,31 @@ public sealed class PlaybackBackendContractTests
     }
 
     [Fact]
+    public async Task OpeningAnotherVideoResetsPlaybackRateToDefault()
+    {
+        using IPlaybackBackend backend = new FakePlaybackBackend();
+
+        Assert.True(await backend.OpenAndPlayAsync("first.mp4"));
+        Assert.True(backend.TrySetRate(2.0f));
+        Assert.True(await backend.OpenAndPlayAsync("second.mp4"));
+
+        Assert.Equal(PlaybackRate.Default, backend.Rate);
+    }
+
+    [Fact]
     public void LibVlcBackendInitializesAndDisposesIdempotently()
     {
         var backend = new LibVlcPlaybackBackend();
+
+        Assert.Equal(PlaybackRate.Default, backend.Rate);
+        Assert.False(backend.TrySetRate(1.5f));
 
         backend.Dispose();
         backend.Dispose();
 
         Assert.False(backend.AudioDiagnostics.RenderThreadAlive);
         Assert.Throws<ObjectDisposedException>(() => _ = backend.IsPlaying);
+        Assert.Throws<ObjectDisposedException>(() => _ = backend.Rate);
     }
 
     [Fact]
@@ -140,6 +158,8 @@ public sealed class PlaybackBackendContractTests
 
         public bool IsMuted { get; private set; }
 
+        public float Rate { get; private set; } = PlaybackRate.Default;
+
         public string? CurrentPath { get; private set; }
 
         public Task<bool> OpenAndPlayAsync(
@@ -150,6 +170,7 @@ public sealed class PlaybackBackendContractTests
             cancellationToken.ThrowIfCancellationRequested();
             CurrentPath = path;
             IsPlaying = true;
+            Rate = PlaybackRate.Default;
             if (initialAudioState is { } audioState)
             {
                 VolumePercent = audioState.VolumePercent;
@@ -173,6 +194,18 @@ public sealed class PlaybackBackendContractTests
             VolumePercent = PlaybackVolume.Clamp(volumePercent);
 
         public void SetMuted(bool isMuted) => IsMuted = isMuted;
+
+        public bool TrySetRate(float rate)
+        {
+            if (CurrentPath is null || !PlaybackRate.IsSupported(rate))
+            {
+                return false;
+            }
+
+            Rate = rate;
+            StateChanged?.Invoke(this, EventArgs.Empty);
+            return true;
+        }
 
         public void Dispose()
         {

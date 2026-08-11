@@ -10,6 +10,7 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
     private Media? _currentMedia;
     private int _volumePercent = PlaybackVolume.DefaultPercent;
     private bool _isMuted;
+    private float _rate = PlaybackRate.Default;
     private bool _disposed;
 
     public LibVlcPlaybackBackend(Action<Exception>? callbackExceptionHandler = null)
@@ -97,6 +98,15 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         {
             ThrowIfDisposed();
             return _isMuted;
+        }
+    }
+
+    public float Rate
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _rate;
         }
     }
 
@@ -250,6 +260,20 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
                 return false;
             }
 
+            if (MediaPlayer.SetRate(PlaybackRate.Default) != 0)
+            {
+                RaiseError(new PlaybackErrorEventArgs(
+                    "playback-default-rate-rejected",
+                    "新しい動画を標準速度へ戻せませんでした。",
+                    "右クリックメニューから1.0倍を選び直してください。",
+                    "LibVLC rejected the default 1.0 playback rate after opening media.",
+                    targetPath: fullPath));
+            }
+            else
+            {
+                _rate = PlaybackRate.Default;
+            }
+
             var previousMedia = _currentMedia;
             _currentMedia = nextMedia;
             nextMedia = null;
@@ -338,6 +362,19 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         ThrowIfDisposed();
         _isMuted = isMuted;
         _audioOutput.SetMuted(isMuted);
+    }
+
+    public bool TrySetRate(float rate)
+    {
+        ThrowIfDisposed();
+        if (CurrentPath is null || !PlaybackRate.IsSupported(rate) || MediaPlayer.SetRate(rate) != 0)
+        {
+            return false;
+        }
+
+        _rate = rate;
+        RaiseSafely(StateChanged, EventArgs.Empty);
+        return true;
     }
 
     private void ApplyVolumeState()

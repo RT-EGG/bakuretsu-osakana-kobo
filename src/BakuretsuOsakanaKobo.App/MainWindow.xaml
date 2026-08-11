@@ -63,6 +63,10 @@
                                 <MenuItem Header="2.0×" Tag="2.0" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
                             </MenuItem>
                             <Separator />
+                            <MenuItem x:Name="SetStartPositionMenuItem"
+                                      Header="現在位置を再生開始位置に設定"
+                                      Click="SetStartPositionMenuItem_OnClick" />
+                            <Separator />
                             <MenuItem x:Name="FullscreenMenuItem"
                                       Header="フルスクリーン"
                                       IsCheckable="True"

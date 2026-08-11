@@ -33,13 +33,24 @@ internal static class Program
         var validateGestures = Environment.GetEnvironmentVariable("BOK_GESTURE_VALIDATION") == "1";
         var validateFullscreen = Environment.GetEnvironmentVariable("BOK_FULLSCREEN_VALIDATION") == "1";
         var validateShortcuts = Environment.GetEnvironmentVariable("BOK_SHORTCUT_VALIDATION") == "1";
+        var validateStartPositions = Environment.GetEnvironmentVariable("BOK_START_POSITION_VALIDATION") == "1";
         var profileFilePath = $"{Path.GetFullPath(args[1])}.video-profiles.json";
         VideoProfileRepository? videoProfiles = null;
-        if (validateProfiles)
+        if (validateProfiles || validateStartPositions)
         {
             videoProfiles = new VideoProfileRepository(profileFilePath);
             videoProfiles.LoadAsync().GetAwaiter().GetResult();
-            videoProfiles.Set(args[0], 275, isMuted: true);
+            if (validateProfiles)
+            {
+                videoProfiles.Set(args[0], 275, isMuted: true);
+            }
+
+            if (validateStartPositions)
+            {
+                videoProfiles.Set(args[0], 100, isMuted: true);
+                videoProfiles.SetStartPosition(args[0], 12_000);
+            }
+
             var initialSave = videoProfiles.SaveAsync().GetAwaiter().GetResult();
             Ensure(initialSave.Success, initialSave.ErrorMessage ?? "Initial video profile save failed.");
         }
@@ -63,6 +74,7 @@ internal static class Program
 
         var exitCode = 1;
         ProfileDelayValidation? profileDelayValidation = null;
+        StartPositionValidation? startPositionValidation = null;
         window.Loaded += async (_, _) =>
         {
             var windowLoadedMilliseconds = processClock.Elapsed.TotalMilliseconds;
@@ -83,6 +95,20 @@ internal static class Program
                     profileDelayValidation = await ValidateVideoProfilesAsync(
                         volumeSlider,
                         backend,
+                        profileFilePath,
+                        notificationSink);
+                    exitCode = 0;
+                    return;
+                }
+
+                if (validateStartPositions)
+                {
+                    startPositionValidation = await ValidateStartPositionsAsync(
+                        window,
+                        videoSurface,
+                        seekSlider,
+                        backend,
+                        videoProfiles!,
                         profileFilePath,
                         notificationSink);
                     exitCode = 0;
@@ -230,6 +256,29 @@ internal static class Program
             Console.WriteLine(JsonSerializer.Serialize(report));
         }
 
+        if (validateStartPositions && exitCode == 0)
+        {
+            using var verifier = new VideoProfileRepository(profileFilePath);
+            var loaded = verifier.LoadAsync().GetAwaiter().GetResult();
+            Ensure(loaded.Warning is null, loaded.Warning ?? "Final start-position profile load failed.");
+            Ensure(verifier.TryGet(args[0], out var finalProfile), "Final start-position profile was not saved.");
+            Ensure(
+                finalProfile.StartPositionMilliseconds == 15_000,
+                "Normal close replaced the registered start position with the last playback position.");
+            var report = new
+            {
+                success = true,
+                video = Path.GetFullPath(args[0]),
+                profileFilePath,
+                startPositionValidation,
+                finalRegisteredStartPositionMilliseconds = finalProfile.StartPositionMilliseconds,
+                lastPlaybackPositionWasNotSaved = true,
+                audioDiagnostics = shutdownDiagnostics,
+            };
+            WriteReport(args[1], report);
+            Console.WriteLine(JsonSerializer.Serialize(report));
+        }
+
         return exitCode;
     }
 
@@ -279,6 +328,126 @@ internal static class Program
             SavedVolumePercent: 320,
             SavedMuted: true,
             WriteFailureKeptPlaying: true);
+    }
+
+    private static async Task<StartPositionValidation> ValidateStartPositionsAsync(
+        MainWindow window,
+        FrameworkElement videoSurface,
+        Slider seekSlider,
+        LibVlcPlaybackBackend backend,
+        VideoProfileRepository videoProfiles,
+        string profileFilePath,
+        RecordingNotificationSink notificationSink)
+    {
+        Ensure(backend.IsMuted, "Start-position validation must remain muted.");
+        await WaitUntilAsync(
+            () => backend.TimeMilliseconds is >= 11_500 and <= 15_000,
+            TimeSpan.FromSeconds(3),
+            "The registered 12-second start position was not restored.");
+        backend.Pause();
+        var initialRestoredMilliseconds = backend.TimeMilliseconds;
+
+        seekSlider.Value = 0.5;
+        var registrationTargetMilliseconds = backend.LengthMilliseconds / 2;
+        await WaitUntilAsync(
+            () => Math.Abs(backend.TimeMilliseconds - registrationTargetMilliseconds) <= 250,
+            TimeSpan.FromSeconds(3),
+            "Could not prepare the current position for registration.");
+
+        var contextMenu = videoSurface.ContextMenu ??
+            throw new InvalidOperationException("The video context menu was not found.");
+        var startPositionItem = contextMenu.Items
+            .OfType<MenuItem>()
+            .Single(item => Equals(item.Header, "現在位置を再生開始位置に設定"));
+        contextMenu.PlacementTarget = videoSurface;
+        contextMenu.IsOpen = true;
+        Ensure(startPositionItem.IsEnabled, "The start-position menu item did not become enabled.");
+        contextMenu.IsOpen = false;
+        var notificationCount = notificationSink.Notifications.Count;
+        startPositionItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        await WaitUntilAsync(
+            () => videoProfiles.TryGet(backend.CurrentPath!, out var profile) &&
+                  profile.StartPositionMilliseconds is not null &&
+                  Math.Abs(profile.StartPositionMilliseconds.Value - registrationTargetMilliseconds) <= 250,
+            TimeSpan.FromSeconds(3),
+            "The menu command did not update the registered start position.");
+        var notificationText = (TextBlock)window.FindName("NotificationMessageText");
+        await WaitUntilAsync(
+            () => notificationText.Text.StartsWith("再生開始位置を ", StringComparison.Ordinal),
+            TimeSpan.FromSeconds(3),
+            "The registration confirmation was not shown.");
+        var persistedRegistrationMilliseconds = await WaitForPersistedStartPositionAsync(
+            profileFilePath,
+            backend.CurrentPath!,
+            registrationTargetMilliseconds,
+            toleranceMilliseconds: 250);
+        Ensure(
+            notificationSink.Notifications.Count == notificationCount,
+            "Successful start-position registration emitted an error notification.");
+
+        var outOfRangeMilliseconds = backend.LengthMilliseconds + 1_000;
+        videoProfiles.SetStartPosition(backend.CurrentPath!, outOfRangeMilliseconds);
+        Ensure((await videoProfiles.SaveAsync()).Success, "Could not save the out-of-range validation profile.");
+        await window.OpenVideoAsync(backend.CurrentPath!);
+        await Task.Delay(300);
+        Ensure(
+            backend.TimeMilliseconds <= 2_000,
+            "An out-of-range registered position did not fall back to the beginning.");
+        var outOfRangeFallbackMilliseconds = backend.TimeMilliseconds;
+
+        videoProfiles.SetStartPosition(backend.CurrentPath!, 15_000);
+        Ensure((await videoProfiles.SaveAsync()).Success, "Could not save the final 15-second start position.");
+        await window.OpenVideoAsync(backend.CurrentPath!);
+        await WaitUntilAsync(
+            () => backend.TimeMilliseconds is >= 14_500 and <= 18_000,
+            TimeSpan.FromSeconds(3),
+            "The final 15-second start position was not restored.");
+        var finalRestoredMilliseconds = backend.TimeMilliseconds;
+
+        backend.Pause();
+        seekSlider.Value = 0.75;
+        await WaitUntilAsync(
+            () => Math.Abs(backend.TimeMilliseconds - (backend.LengthMilliseconds * 0.75)) <= 250,
+            TimeSpan.FromSeconds(3),
+            "Could not move away from the registered position before normal close.");
+        var lastPlaybackPositionMilliseconds = backend.TimeMilliseconds;
+
+        return new StartPositionValidation(
+            InitialRegisteredMilliseconds: 12_000,
+            InitialRestoredMilliseconds: initialRestoredMilliseconds,
+            PersistedRegistrationMilliseconds: persistedRegistrationMilliseconds,
+            OutOfRangeRegisteredMilliseconds: outOfRangeMilliseconds,
+            OutOfRangeFallbackMilliseconds: outOfRangeFallbackMilliseconds,
+            FinalRegisteredMilliseconds: 15_000,
+            FinalRestoredMilliseconds: finalRestoredMilliseconds,
+            LastPlaybackPositionMilliseconds: lastPlaybackPositionMilliseconds,
+            ConfirmationMessage: notificationText.Text,
+            FinalMuted: backend.IsMuted);
+    }
+
+    private static async Task<long> WaitForPersistedStartPositionAsync(
+        string profileFilePath,
+        string videoPath,
+        long expectedMilliseconds,
+        long toleranceMilliseconds)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+        while (DateTime.UtcNow < deadline)
+        {
+            using var verifier = new VideoProfileRepository(profileFilePath);
+            var loaded = await verifier.LoadAsync();
+            if (loaded.Warning is null &&
+                verifier.TryGet(videoPath, out var profile) &&
+                profile.StartPositionMilliseconds is { } startPositionMilliseconds &&
+                Math.Abs(startPositionMilliseconds - expectedMilliseconds) <= toleranceMilliseconds)
+            {
+                return startPositionMilliseconds;
+            }
+
+            await Task.Delay(20);
+        }
+
+        throw new TimeoutException("The registered start position was not persisted within three seconds.");
     }
 
     private static async Task<RealtimeAudioDiagnostics> ValidateNaturalDrainAsync(
@@ -1250,6 +1419,18 @@ internal static class Program
         int SavedVolumePercent,
         bool SavedMuted,
         bool WriteFailureKeptPlaying);
+
+    private readonly record struct StartPositionValidation(
+        long InitialRegisteredMilliseconds,
+        long InitialRestoredMilliseconds,
+        long PersistedRegistrationMilliseconds,
+        long OutOfRangeRegisteredMilliseconds,
+        long OutOfRangeFallbackMilliseconds,
+        long FinalRegisteredMilliseconds,
+        long FinalRestoredMilliseconds,
+        long LastPlaybackPositionMilliseconds,
+        string ConfirmationMessage,
+        bool FinalMuted);
 
     private sealed class RecordingNotificationSink : IUserNotificationSink
     {

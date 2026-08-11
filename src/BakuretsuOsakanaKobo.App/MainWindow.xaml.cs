@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Threading;
 using BakuretsuOsakanaKobo.Infrastructure.Errors;
 using BakuretsuOsakanaKobo.Infrastructure.Persistence;
@@ -123,6 +124,15 @@ public partial class MainWindow : Window
 
     internal void ShowNotification(UserNotification notification)
     {
+        (NotificationBorder.Background, NotificationBorder.BorderBrush) = notification.Severity switch
+        {
+            UserNotificationSeverity.Information =>
+                (new SolidColorBrush(Color.FromRgb(0x18, 0x2A, 0x38)), new SolidColorBrush(Color.FromRgb(0x41, 0x76, 0x9B))),
+            UserNotificationSeverity.Warning =>
+                (new SolidColorBrush(Color.FromRgb(0x2B, 0x21, 0x15)), new SolidColorBrush(Color.FromRgb(0x9A, 0x6A, 0x2D))),
+            _ =>
+                (new SolidColorBrush(Color.FromRgb(0x2B, 0x20, 0x26)), new SolidColorBrush(Color.FromRgb(0xFF, 0x6B, 0x79))),
+        };
         NotificationMessageText.Text = notification.Message;
         NotificationActionText.Text = notification.SuggestedAction;
         NotificationBorder.Visibility = Visibility.Visible;
@@ -233,10 +243,10 @@ public partial class MainWindow : Window
         try
         {
             await FlushVideoProfilesAsync();
-            var initialAudioState = GetInitialAudioState(path);
+            var initialState = GetInitialPlaybackState(path);
             if (await _playbackBackend.OpenAndPlayAsync(
                     path,
-                    initialAudioState,
+                    initialState,
                     openCancellation.Token))
             {
                 _hasPlaybackError = false;
@@ -785,7 +795,48 @@ public partial class MainWindow : Window
     {
         UpdateFullscreenControlsInteraction(isContextMenuOpen: true);
         UpdatePlaybackRateControls();
+        SetStartPositionMenuItem.IsEnabled =
+            CanControlPlayback() &&
+            _videoProfiles is not null &&
+            _playbackBackend is { IsSeekable: true, LengthMilliseconds: > 0 };
         FullscreenMenuItem.IsChecked = _isFullscreen;
+    }
+
+    private async void SetStartPositionMenuItem_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        var backend = _playbackBackend;
+        var profiles = _videoProfiles;
+        if (!SetStartPositionMenuItem.IsEnabled ||
+            backend?.CurrentPath is null ||
+            profiles is null ||
+            backend.LengthMilliseconds <= 0)
+        {
+            return;
+        }
+
+        eventArgs.Handled = true;
+        var path = backend.CurrentPath;
+        var positionMilliseconds = Math.Clamp(
+            backend.TimeMilliseconds,
+            0,
+            backend.LengthMilliseconds);
+        try
+        {
+            profiles.SetStartPosition(path, positionMilliseconds);
+            _videoProfileRevision++;
+            _videoProfileSaveTimer.Stop();
+            if (await FlushVideoProfilesAsync())
+            {
+                ShowNotification(new UserNotification(
+                    UserNotificationSeverity.Information,
+                    $"再生開始位置を {PlaybackTimelinePresentation.FormatMilliseconds(positionMilliseconds)} に設定しました。",
+                    "次回からこの位置で再生します。"));
+            }
+        }
+        catch (Exception exception)
+        {
+            ReportUnexpectedVideoProfileFailure(exception);
+        }
     }
 
     private void VideoContextMenu_OnClosed(object sender, RoutedEventArgs eventArgs) =>
@@ -1126,7 +1177,7 @@ public partial class MainWindow : Window
             targetPath: _playbackBackend?.CurrentPath);
     }
 
-    private PlaybackAudioState? GetInitialAudioState(string path)
+    private PlaybackInitialState? GetInitialPlaybackState(string path)
     {
         var profiles = _videoProfiles;
         if (profiles is null)
@@ -1137,8 +1188,10 @@ public partial class MainWindow : Window
         try
         {
             return profiles.TryGet(path, out var profile)
-                ? new PlaybackAudioState(profile.VolumePercent, profile.IsMuted)
-                : PlaybackAudioState.Default;
+                ? new PlaybackInitialState(
+                    new PlaybackAudioState(profile.VolumePercent, profile.IsMuted),
+                    profile.StartPositionMilliseconds)
+                : new PlaybackInitialState(PlaybackAudioState.Default, startPositionMilliseconds: null);
         }
         catch (Exception exception) when (
             exception is ArgumentException or NotSupportedException or PathTooLongException)
@@ -1179,12 +1232,12 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task FlushVideoProfilesAsync()
+    private async Task<bool> FlushVideoProfilesAsync()
     {
         var profiles = _videoProfiles;
         if (profiles is null || _savedVideoProfileRevision >= _videoProfileRevision)
         {
-            return;
+            return true;
         }
 
         if (_videoProfileSaveTask is { IsCompleted: false } pendingSave)
@@ -1192,7 +1245,7 @@ public partial class MainWindow : Window
             await pendingSave;
             if (_savedVideoProfileRevision >= _videoProfileRevision)
             {
-                return;
+                return true;
             }
         }
 
@@ -1215,18 +1268,19 @@ public partial class MainWindow : Window
         if (saveResult.Success)
         {
             _savedVideoProfileRevision = Math.Max(_savedVideoProfileRevision, revision);
-            return;
+            return true;
         }
 
         _errorReporter?.Report(
             new UserNotification(
                 UserNotificationSeverity.Warning,
-                "動画ごとの音量設定を保存できません。",
+                "動画ごとの設定を保存できません。",
                 "再生は続行できます。アプリの配置先に書き込み権限があるか確認してください。"),
             "video-profiles-save-failed",
             saveResult.ErrorMessage ?? "The video profile save failed.",
             saveResult.Exception,
             profiles.FilePath);
+        return false;
     }
 
     private void ReportUnexpectedVideoProfileFailure(Exception exception)
@@ -1234,7 +1288,7 @@ public partial class MainWindow : Window
         _errorReporter?.Report(
             new UserNotification(
                 UserNotificationSeverity.Warning,
-                "動画ごとの音量設定を保存できません。",
+                "動画ごとの設定を保存できません。",
                 "再生は続行できます。アプリの配置先に書き込み権限があるか確認してください。"),
             "video-profiles-save-unexpected-failure",
             exception.Message,

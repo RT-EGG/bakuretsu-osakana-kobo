@@ -15,3 +15,21 @@ public readonly record struct PlaybackAudioState
     public static PlaybackAudioState Default =>
         new(PlaybackVolume.DefaultPercent, isMuted: false);
 }
+
+public readonly record struct PlaybackInitialState
+{
+    public PlaybackInitialState(PlaybackAudioState audioState, long? startPositionMilliseconds)
+    {
+        if (startPositionMilliseconds is < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(startPositionMilliseconds));
+        }
+
+        AudioState = audioState;
+        StartPositionMilliseconds = startPositionMilliseconds;
+    }
+
+    public PlaybackAudioState AudioState { get; }
+
+    public long? StartPositionMilliseconds { get; }
+}

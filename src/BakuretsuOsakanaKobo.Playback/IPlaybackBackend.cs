@@ -24,7 +24,7 @@ public interface IPlaybackBackend : IDisposable
 
     Task<bool> OpenAndPlayAsync(
         string path,
-        PlaybackAudioState? initialAudioState = null,
+        PlaybackInitialState? initialState = null,
         CancellationToken cancellationToken = default);
 
     void Play();

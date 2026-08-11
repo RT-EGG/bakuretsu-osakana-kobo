@@ -22,6 +22,7 @@ public sealed class VideoProfileDocument
         {
             if (profile is null ||
                 profile.VolumePercent is < VideoProfileEntry.MinimumVolumePercent or > VideoProfileEntry.MaximumVolumePercent ||
+                profile.StartPositionMilliseconds is < 0 ||
                 !VideoProfilePath.TryNormalize(profile.VideoPath, out var normalizedPath) ||
                 !string.Equals(profile.VideoPath, normalizedPath, StringComparison.OrdinalIgnoreCase) ||
                 !paths.Add(normalizedPath))
@@ -45,6 +46,8 @@ public sealed class VideoProfileEntry
     public int VolumePercent { get; init; } = DefaultVolumePercent;
 
     public bool IsMuted { get; init; }
+
+    public long? StartPositionMilliseconds { get; init; }
 }
 
 public static class VideoProfilePath

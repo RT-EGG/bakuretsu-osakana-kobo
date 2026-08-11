@@ -34,7 +34,9 @@ public sealed class PlaybackBackendContractTests
 
         Assert.True(await backend.OpenAndPlayAsync(
             "sample.mp4",
-            new PlaybackAudioState(350, isMuted: true)));
+            new PlaybackInitialState(
+                new PlaybackAudioState(350, isMuted: true),
+                startPositionMilliseconds: null)));
 
         Assert.Equal(350, backend.VolumePercent);
         Assert.True(backend.IsMuted);
@@ -164,17 +166,17 @@ public sealed class PlaybackBackendContractTests
 
         public Task<bool> OpenAndPlayAsync(
             string path,
-            PlaybackAudioState? initialAudioState = null,
+            PlaybackInitialState? initialState = null,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             CurrentPath = path;
             IsPlaying = true;
             Rate = PlaybackRate.Default;
-            if (initialAudioState is { } audioState)
+            if (initialState is { } state)
             {
-                VolumePercent = audioState.VolumePercent;
-                IsMuted = audioState.IsMuted;
+                VolumePercent = state.AudioState.VolumePercent;
+                IsMuted = state.AudioState.IsMuted;
             }
             StateChanged?.Invoke(this, EventArgs.Empty);
             return Task.FromResult(true);

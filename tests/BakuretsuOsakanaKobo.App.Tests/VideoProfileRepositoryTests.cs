@@ -8,7 +8,7 @@ namespace BakuretsuOsakanaKobo.App.Tests;
 public sealed class VideoProfileRepositoryTests
 {
     [Fact]
-    public async Task SaveAndLoadAsync_RoundTripsNormalizedPathVolumeAndMute()
+    public async Task SaveAndLoadAsync_RoundTripsNormalizedPathVolumeMuteAndStartPosition()
     {
         using var directory = new TestDirectory();
         var filePath = Path.Combine(directory.Path, "data", "video-profiles.json");
@@ -17,6 +17,7 @@ public sealed class VideoProfileRepositoryTests
         {
             await repository.LoadAsync();
             repository.Set(videoPath, 350, isMuted: true);
+            repository.SetStartPosition(videoPath, 12_345);
             var saved = await repository.SaveAsync();
             Assert.True(saved.Success, saved.ErrorMessage);
         }
@@ -24,11 +25,12 @@ public sealed class VideoProfileRepositoryTests
         using var reloadedRepository = new VideoProfileRepository(filePath);
         var loaded = await reloadedRepository.LoadAsync();
 
-        Assert.False(loaded.UsedDefault);
+        Assert.False(loaded.UsedDefault, loaded.Warning);
         Assert.True(reloadedRepository.TryGet(videoPath, out var profile));
         Assert.Equal(Path.GetFullPath(videoPath), profile.VideoPath);
         Assert.Equal(350, profile.VolumePercent);
         Assert.True(profile.IsMuted);
+        Assert.Equal(12_345, profile.StartPositionMilliseconds);
     }
 
     [Fact]
@@ -62,6 +64,95 @@ public sealed class VideoProfileRepositoryTests
 
         Assert.True(repository.TryGet(videoPath, out var profile));
         Assert.Equal(expected, profile.VolumePercent);
+    }
+
+    [Fact]
+    public async Task AudioAndStartPositionUpdates_PreserveEachOther()
+    {
+        using var directory = new TestDirectory();
+        using var repository = CreateRepository(directory.Path);
+        await repository.LoadAsync();
+        var videoPath = Path.Combine(directory.Path, "sample.mp4");
+
+        repository.SetStartPosition(videoPath, 15_000);
+        repository.Set(videoPath, 275, isMuted: true);
+        Assert.True(repository.TryGet(videoPath, out var afterAudio));
+        Assert.Equal(15_000, afterAudio.StartPositionMilliseconds);
+
+        repository.SetStartPosition(videoPath, 30_000);
+        Assert.True(repository.TryGet(videoPath, out var afterStartPosition));
+        Assert.Equal(275, afterStartPosition.VolumePercent);
+        Assert.True(afterStartPosition.IsMuted);
+        Assert.Equal(30_000, afterStartPosition.StartPositionMilliseconds);
+    }
+
+    [Fact]
+    public async Task SetStartPosition_RejectsNegativeValue()
+    {
+        using var directory = new TestDirectory();
+        using var repository = CreateRepository(directory.Path);
+        await repository.LoadAsync();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            repository.SetStartPosition(Path.Combine(directory.Path, "sample.mp4"), -1));
+    }
+
+    [Fact]
+    public async Task LoadAsync_AcceptsExistingSchemaWithoutStartPosition()
+    {
+        using var directory = new TestDirectory();
+        var filePath = Path.Combine(directory.Path, "data", "video-profiles.json");
+        var videoPath = Path.Combine(directory.Path, "sample.mp4");
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        await File.WriteAllBytesAsync(
+            filePath,
+            JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                SchemaVersion = 1,
+                Profiles = new[]
+                {
+                    new { VideoPath = videoPath, VolumePercent = 125, IsMuted = true },
+                },
+            }));
+        using var repository = new VideoProfileRepository(filePath);
+
+        var loaded = await repository.LoadAsync();
+
+        Assert.False(loaded.UsedDefault, loaded.Warning);
+        Assert.True(repository.TryGet(videoPath, out var profile));
+        Assert.Null(profile.StartPositionMilliseconds);
+    }
+
+    [Fact]
+    public async Task LoadAsync_RejectsNegativeStartPosition()
+    {
+        using var directory = new TestDirectory();
+        var filePath = Path.Combine(directory.Path, "data", "video-profiles.json");
+        var videoPath = Path.Combine(directory.Path, "sample.mp4");
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        await File.WriteAllBytesAsync(
+            filePath,
+            JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                SchemaVersion = 1,
+                Profiles = new[]
+                {
+                    new
+                    {
+                        VideoPath = videoPath,
+                        VolumePercent = 100,
+                        IsMuted = false,
+                        StartPositionMilliseconds = -1,
+                    },
+                },
+            }));
+        using var repository = new VideoProfileRepository(filePath);
+
+        var loaded = await repository.LoadAsync();
+
+        Assert.True(loaded.UsedDefault);
+        Assert.NotNull(loaded.CorruptBackupPath);
+        Assert.False(repository.TryGet(videoPath, out _));
     }
 
     [Fact]

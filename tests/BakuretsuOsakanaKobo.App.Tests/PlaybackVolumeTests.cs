@@ -5,6 +5,13 @@ namespace BakuretsuOsakanaKobo.App.Tests;
 
 public sealed class PlaybackVolumeTests
 {
+    [Fact]
+    public void PlaybackInitialState_RejectsNegativeStartPosition()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new PlaybackInitialState(PlaybackAudioState.Default, -1));
+    }
+
     [Theory]
     [InlineData(-1, 0, true)]
     [InlineData(350, 350, false)]

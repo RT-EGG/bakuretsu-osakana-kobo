@@ -148,8 +148,8 @@ public partial class App : Application
                 errorReporter.Report(
                     new UserNotification(
                         UserNotificationSeverity.Warning,
-                        "動画ごとの音量設定を読み込めなかったため、初期値で続行します。",
-                        "必要な動画の音量とミュートをもう一度指定してください。"),
+                        "動画ごとの設定を読み込めなかったため、初期値で続行します。",
+                        "必要な動画の音量、ミュート、再生開始位置をもう一度指定してください。"),
                     "video-profiles-load-recovered",
                     loadResult.Warning,
                     targetPath: paths.VideoProfilesFilePath);
@@ -163,7 +163,7 @@ public partial class App : Application
             errorReporter.Report(
                 new UserNotification(
                     UserNotificationSeverity.Warning,
-                    "動画ごとの音量設定を初期化できませんでした。",
+                    "動画ごとの設定を初期化できませんでした。",
                     "設定は保存されませんが、動画の再生は続行できます。"),
                 "video-profiles-initialization-failed",
                 exception.Message,

@@ -116,7 +116,7 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
 
     public async Task<bool> OpenAndPlayAsync(
         string path,
-        PlaybackAudioState? initialAudioState = null,
+        PlaybackInitialState? initialState = null,
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
@@ -190,7 +190,7 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
 
         Media? nextMedia = null;
         var previousAudioState = new PlaybackAudioState(_volumePercent, _isMuted);
-        var nextAudioState = initialAudioState ?? previousAudioState;
+        var nextAudioState = initialState?.AudioState ?? previousAudioState;
         var nextAudioStateApplied = false;
         var nextAudioStateCommitted = false;
         try
@@ -272,6 +272,14 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
             else
             {
                 _rate = PlaybackRate.Default;
+            }
+
+            var initialPosition = PlaybackPosition.ResolveInitialPosition(
+                initialState?.StartPositionMilliseconds,
+                Math.Max(0, nextMedia.Duration));
+            if (initialPosition is not null)
+            {
+                MediaPlayer.Position = (float)initialPosition.Value;
             }
 
             var previousMedia = _currentMedia;

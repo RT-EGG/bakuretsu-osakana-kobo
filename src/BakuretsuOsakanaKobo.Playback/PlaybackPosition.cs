@@ -21,4 +21,23 @@ public static class PlaybackPosition
             lengthMilliseconds);
         return (double)(targetMilliseconds / lengthMilliseconds);
     }
+
+    public static double? ResolveInitialPosition(
+        long? registeredMilliseconds,
+        long lengthMilliseconds)
+    {
+        if (registeredMilliseconds is null)
+        {
+            return null;
+        }
+
+        if (registeredMilliseconds < 0 ||
+            lengthMilliseconds <= 0 ||
+            registeredMilliseconds > lengthMilliseconds)
+        {
+            return 0;
+        }
+
+        return (double)((decimal)registeredMilliseconds.Value / lengthMilliseconds);
+    }
 }

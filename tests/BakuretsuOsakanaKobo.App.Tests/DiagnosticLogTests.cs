@@ -122,6 +122,20 @@ public sealed class DiagnosticLogTests
     }
 
     [Fact]
+    public void ErrorReporter_MapsInformationNotificationToInformationDiagnostic()
+    {
+        var log = new RecordingDiagnosticLog();
+        var reporter = new ErrorReporter(log, new RecordingNotificationSink());
+
+        reporter.Report(
+            new UserNotification(UserNotificationSeverity.Information, "保存しました。", "次回から適用します。"),
+            "profile-saved",
+            "The profile was saved.");
+
+        Assert.Equal(DiagnosticSeverity.Information, Assert.Single(log.Events).Severity);
+    }
+
+    [Fact]
     public void ErrorReporter_WhenNotificationSinkThrows_ContainsFailureAndRecordsIt()
     {
         var log = new RecordingDiagnosticLog();

@@ -54,20 +54,38 @@ public sealed class VideoProfileRepository : IDisposable
     public void Set(string videoPath, int volumePercent, bool isMuted)
     {
         var normalizedPath = VideoProfilePath.Normalize(videoPath);
-        var profile = new VideoProfileEntry
-        {
-            VideoPath = normalizedPath,
-            VolumePercent = Math.Clamp(
-                volumePercent,
-                VideoProfileEntry.MinimumVolumePercent,
-                VideoProfileEntry.MaximumVolumePercent),
-            IsMuted = isMuted,
-        };
-
         lock (_sync)
         {
             ThrowIfNotReady();
-            _profiles[normalizedPath] = profile;
+            _profiles.TryGetValue(normalizedPath, out var existing);
+            _profiles[normalizedPath] = new VideoProfileEntry
+            {
+                VideoPath = normalizedPath,
+                VolumePercent = Math.Clamp(
+                    volumePercent,
+                    VideoProfileEntry.MinimumVolumePercent,
+                    VideoProfileEntry.MaximumVolumePercent),
+                IsMuted = isMuted,
+                StartPositionMilliseconds = existing?.StartPositionMilliseconds,
+            };
+        }
+    }
+
+    public void SetStartPosition(string videoPath, long startPositionMilliseconds)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(startPositionMilliseconds);
+        var normalizedPath = VideoProfilePath.Normalize(videoPath);
+        lock (_sync)
+        {
+            ThrowIfNotReady();
+            _profiles.TryGetValue(normalizedPath, out var existing);
+            _profiles[normalizedPath] = new VideoProfileEntry
+            {
+                VideoPath = normalizedPath,
+                VolumePercent = existing?.VolumePercent ?? VideoProfileEntry.DefaultVolumePercent,
+                IsMuted = existing?.IsMuted ?? false,
+                StartPositionMilliseconds = startPositionMilliseconds,
+            };
         }
     }
 

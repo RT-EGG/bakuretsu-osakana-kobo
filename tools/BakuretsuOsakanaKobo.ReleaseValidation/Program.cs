@@ -626,6 +626,7 @@ internal static class Program
         var initialStyle = window.WindowStyle;
         var initialResizeMode = window.ResizeMode;
         var initialBounds = window.RestoreBounds;
+        Ensure(NativeMethods.GetWindowRect(windowHandle, out var initialNativeBounds), "Could not read the initial window bounds.");
         var initialMonitor = NativeMethods.MonitorFromWindow(
             windowHandle,
             NativeMethods.MonitorDefaultToNearest);
@@ -667,6 +668,63 @@ internal static class Program
             Ensure(
                 fullscreenBounds.Equals(monitorInfo.Monitor),
                 $"Fullscreen bounds {fullscreenBounds} did not match monitor bounds {monitorInfo.Monitor}.");
+
+            await Task.Delay(FullscreenControlsState.AutoHideDelay - TimeSpan.FromMilliseconds(350));
+            Ensure(playbackControls.Visibility == Visibility.Visible, "Playback controls hid before the approved three-second delay.");
+            await WaitUntilAsync(
+                () => playbackControls.Visibility == Visibility.Collapsed,
+                TimeSpan.FromSeconds(1),
+                "Playback controls did not hide after three seconds of fullscreen inactivity.");
+
+            MoveCursor(videoRegion.PointToScreen(
+                new Point(videoRegion.ActualWidth / 2, videoRegion.ActualHeight / 3)));
+            await WaitUntilAsync(
+                () => playbackControls.Visibility == Visibility.Visible,
+                TimeSpan.FromSeconds(1),
+                "Real mouse movement did not show the hidden playback controls.");
+            MoveCursor(playbackControls.PointToScreen(
+                new Point(playbackControls.ActualWidth / 2, playbackControls.ActualHeight / 2)));
+            await WaitUntilAsync(
+                () => playbackControls.IsMouseOver,
+                TimeSpan.FromSeconds(1),
+                "The real pointer did not enter the fullscreen playback controls.");
+            await Task.Delay(FullscreenControlsState.AutoHideDelay + TimeSpan.FromMilliseconds(250));
+            Ensure(playbackControls.Visibility == Visibility.Visible, "Playback controls hid while the pointer was over them.");
+
+            MoveCursor(videoRegion.PointToScreen(
+                new Point(videoRegion.ActualWidth / 2, videoRegion.ActualHeight / 3)));
+            await WaitUntilAsync(
+                () => !playbackControls.IsMouseOver,
+                TimeSpan.FromSeconds(1),
+                "The real pointer did not leave the fullscreen playback controls.");
+            await Task.Delay(FullscreenControlsState.AutoHideDelay - TimeSpan.FromMilliseconds(300));
+            Ensure(playbackControls.Visibility == Visibility.Visible, "Playback controls hid before three seconds after pointer leave.");
+            await WaitUntilAsync(
+                () => playbackControls.Visibility == Visibility.Collapsed,
+                TimeSpan.FromSeconds(1),
+                "Playback controls did not hide after the pointer left them.");
+
+            MoveCursor(new Point(
+                videoRegion.PointToScreen(new Point(videoRegion.ActualWidth / 2, videoRegion.ActualHeight / 3)).X + 20,
+                videoRegion.PointToScreen(new Point(videoRegion.ActualWidth / 2, videoRegion.ActualHeight / 3)).Y));
+            await WaitUntilAsync(
+                () => playbackControls.Visibility == Visibility.Visible,
+                TimeSpan.FromSeconds(1),
+                "Mouse movement did not show controls before context-menu validation.");
+            NativeMethods.MouseRightClick();
+            await WaitUntilAsync(
+                () => contextMenu.IsOpen,
+                TimeSpan.FromSeconds(1),
+                "A real right click did not open the fullscreen context menu.");
+            await Task.Delay(FullscreenControlsState.AutoHideDelay + TimeSpan.FromMilliseconds(250));
+            Ensure(playbackControls.Visibility == Visibility.Visible, "Playback controls hid while the context menu was open.");
+            contextMenu.IsOpen = false;
+            await Task.Delay(FullscreenControlsState.AutoHideDelay - TimeSpan.FromMilliseconds(300));
+            Ensure(playbackControls.Visibility == Visibility.Visible, "Playback controls hid before three seconds after context-menu close.");
+            await WaitUntilAsync(
+                () => playbackControls.Visibility == Visibility.Collapsed,
+                TimeSpan.FromSeconds(1),
+                "Playback controls did not hide after the context menu closed.");
 
             await Task.Delay(600);
             MoveCursor(videoRegion.PointToScreen(
@@ -756,6 +814,14 @@ internal static class Program
                 initialResizeMode,
                 initialBounds);
 
+            var displayValidations = await ValidateFullscreenAcrossMonitorsAsync(
+                window,
+                windowHandle,
+                videoRegion,
+                playbackControls,
+                initialMonitor,
+                initialNativeBounds);
+
             return new
             {
                 currentMonitorHandle = initialMonitor.ToInt64(),
@@ -766,6 +832,12 @@ internal static class Program
                 escapeExited = true,
                 altEnterEnteredAndExitedWithInputFocus = true,
                 maximizedStateRestored = true,
+                autoHideDelayMilliseconds = FullscreenControlsState.AutoHideDelay.TotalMilliseconds,
+                idleAutoHide = true,
+                mouseMovementShowedControls = true,
+                controlsHoverPreventedHide = true,
+                contextMenuPreventedHide = true,
+                displayValidations,
                 restoredState = window.WindowState.ToString(),
                 restoredBounds = window.RestoreBounds,
                 finalMuted = backend.IsMuted,
@@ -785,6 +857,95 @@ internal static class Program
 
             NativeMethods.SetCursorPos(originalCursor.X, originalCursor.Y);
             window.Topmost = false;
+        }
+    }
+
+    private static async Task<IReadOnlyList<object>> ValidateFullscreenAcrossMonitorsAsync(
+        MainWindow window,
+        nint windowHandle,
+        FrameworkElement videoRegion,
+        FrameworkElement playbackControls,
+        nint initialMonitor,
+        NativeRect initialNativeBounds)
+    {
+        var monitors = NativeMethods.GetMonitors();
+        Ensure(monitors.Count >= 2, "Multiple-display validation requires at least two active monitors.");
+        var results = new List<object>(monitors.Count);
+        var observedDpis = new HashSet<uint>();
+        try
+        {
+            foreach (var monitor in monitors)
+            {
+                NativeMethods.MoveToMonitor(windowHandle, monitor);
+                await WaitUntilAsync(
+                    () => NativeMethods.MonitorFromWindow(windowHandle, NativeMethods.MonitorDefaultToNearest) == monitor.Handle,
+                    TimeSpan.FromSeconds(2),
+                    "The product window did not move to the target monitor.");
+                await Task.Delay(300);
+                var dpi = NativeMethods.GetDpiForWindow(windowHandle);
+                observedDpis.Add(dpi);
+                Ensure(NativeMethods.GetWindowRect(windowHandle, out var normalBounds), "Could not read the moved window bounds.");
+                Ensure(window.ActualWidth >= window.MinWidth && window.ActualHeight >= window.MinHeight, "The product layout fell below its minimum size after a DPI transition.");
+                Ensure(videoRegion.ActualWidth > 0 && videoRegion.ActualHeight > 0, "The video region collapsed after a DPI transition.");
+                Ensure(playbackControls.ActualWidth > 0 && playbackControls.ActualHeight > 0, "The playback controls collapsed after a DPI transition.");
+
+                window.Activate();
+                NativeMethods.SetForegroundWindow(windowHandle);
+                NativeMethods.PressAltEnter();
+                await WaitUntilAsync(
+                    () => window.IsFullscreen,
+                    TimeSpan.FromSeconds(1),
+                    "Alt+Enter did not enter fullscreen on a target monitor.");
+                Ensure(NativeMethods.GetWindowRect(windowHandle, out var fullscreenBounds), "Could not read multi-monitor fullscreen bounds.");
+                Ensure(
+                    fullscreenBounds.Equals(monitor.Info.Monitor),
+                    $"Fullscreen bounds {fullscreenBounds} did not match target monitor bounds {monitor.Info.Monitor}.");
+                NativeMethods.PressKey(NativeMethods.VirtualKeyEscape);
+                await WaitUntilAsync(
+                    () => !window.IsFullscreen,
+                    TimeSpan.FromSeconds(1),
+                    "Escape did not exit fullscreen on a target monitor.");
+                Ensure(NativeMethods.GetWindowRect(windowHandle, out var restoredBounds), "Could not read restored multi-monitor bounds.");
+                Ensure(
+                    restoredBounds.Equals(normalBounds),
+                    $"Fullscreen exit changed the moved window bounds from {normalBounds} to {restoredBounds}.");
+
+                results.Add(new
+                {
+                    monitorHandle = monitor.Handle.ToInt64(),
+                    dpi,
+                    monitorBounds = ToReportBounds(monitor.Info.Monitor),
+                    normalBounds = ToReportBounds(normalBounds),
+                    fullscreenBounds = ToReportBounds(fullscreenBounds),
+                    restoredBounds = ToReportBounds(restoredBounds),
+                    layoutWidth = window.ActualWidth,
+                    layoutHeight = window.ActualHeight,
+                });
+            }
+
+            Ensure(observedDpis.Count >= 2, "The active monitors did not expose distinct DPI values for product validation.");
+            return results;
+        }
+        finally
+        {
+            if (window.IsFullscreen)
+            {
+                NativeMethods.PressKey(NativeMethods.VirtualKeyEscape);
+                await WaitUntilAsync(
+                    () => !window.IsFullscreen,
+                    TimeSpan.FromSeconds(1),
+                    "Multi-monitor fullscreen cleanup failed.");
+            }
+
+            NativeMethods.MoveWindow(
+                windowHandle,
+                initialNativeBounds.Left,
+                initialNativeBounds.Top);
+            await WaitUntilAsync(
+                () => NativeMethods.MonitorFromWindow(windowHandle, NativeMethods.MonitorDefaultToNearest) == initialMonitor,
+                TimeSpan.FromSeconds(2),
+                "The validation window did not return to its initial monitor.");
+            await Task.Delay(300);
         }
     }
 
@@ -969,6 +1130,9 @@ internal static class Program
         private const uint MouseEventRightUp = 0x0010;
         private const uint MouseEventWheel = 0x0800;
         private const uint KeyEventKeyUp = 0x0002;
+        private const uint SetWindowPositionNoSize = 0x0001;
+        private const uint SetWindowPositionNoZOrder = 0x0004;
+        private const uint SetWindowPositionShowWindow = 0x0040;
         private const byte VirtualKeyMenu = 0x12;
         private const byte VirtualKeyReturn = 0x0D;
         internal const byte VirtualKeyEscape = 0x1B;
@@ -993,6 +1157,28 @@ internal static class Program
 
         [DllImport("user32.dll")]
         internal static extern nint MonitorFromWindow(nint windowHandle, uint flags);
+
+        [DllImport("user32.dll")]
+        internal static extern uint GetDpiForWindow(nint windowHandle);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool EnumDisplayMonitors(
+            nint deviceContext,
+            nint clipRectangle,
+            MonitorEnumProcedure callback,
+            nint data);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetWindowPos(
+            nint windowHandle,
+            nint insertAfter,
+            int x,
+            int y,
+            int width,
+            int height,
+            uint flags);
 
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -1045,6 +1231,48 @@ internal static class Program
             Ensure(GetMonitorInfo(monitor, ref info), "Could not read monitor bounds.");
             return info;
         }
+
+        internal static IReadOnlyList<MonitorDescriptor> GetMonitors()
+        {
+            var monitors = new List<MonitorDescriptor>();
+            MonitorEnumProcedure callback = (monitor, _, _, _) =>
+            {
+                monitors.Add(new MonitorDescriptor(monitor, GetMonitorInformation(monitor)));
+                return true;
+            };
+            Ensure(
+                EnumDisplayMonitors(0, 0, callback, 0),
+                $"Could not enumerate active monitors: {Marshal.GetLastWin32Error()}.");
+            return monitors;
+        }
+
+        internal static void MoveToMonitor(nint windowHandle, MonitorDescriptor monitor)
+        {
+            Ensure(GetWindowRect(windowHandle, out var windowBounds), "Could not read bounds before moving the window.");
+            var width = windowBounds.Right - windowBounds.Left;
+            var height = windowBounds.Bottom - windowBounds.Top;
+            var workWidth = monitor.Info.WorkArea.Right - monitor.Info.WorkArea.Left;
+            var workHeight = monitor.Info.WorkArea.Bottom - monitor.Info.WorkArea.Top;
+            var left = monitor.Info.WorkArea.Left + Math.Max(0, (workWidth - width) / 2);
+            var top = monitor.Info.WorkArea.Top + Math.Max(0, (workHeight - height) / 2);
+            MoveWindow(windowHandle, left, top);
+        }
+
+        internal static void MoveWindow(nint windowHandle, int left, int top)
+        {
+            Ensure(
+                SetWindowPos(
+                    windowHandle,
+                    0,
+                    left,
+                    top,
+                    0,
+                    0,
+                    SetWindowPositionNoSize | SetWindowPositionNoZOrder | SetWindowPositionShowWindow),
+                $"Could not move the product window: {Marshal.GetLastWin32Error()}.");
+        }
+
+        private delegate bool MonitorEnumProcedure(nint monitor, nint deviceContext, nint rectangle, nint data);
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -1080,4 +1308,6 @@ internal static class Program
         internal NativeRect WorkArea;
         internal uint Flags;
     }
+
+    private readonly record struct MonitorDescriptor(nint Handle, MonitorInfo Info);
 }

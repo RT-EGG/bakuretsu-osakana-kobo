@@ -13,8 +13,9 @@
         UseLayoutRounding="True"
         SnapsToDevicePixels="True"
         PreviewKeyDown="Window_OnPreviewKeyDown"
+        PreviewMouseMove="Window_OnPreviewMouseMove"
         AutomationProperties.Name="爆裂おさかな工房">
-    <Grid>
+    <Grid x:Name="RootLayout">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -51,7 +52,8 @@
                       LostMouseCapture="VideoSurface_OnLostMouseCapture">
                     <Grid.ContextMenu>
                         <ContextMenu x:Name="VideoContextMenu"
-                                     Opened="VideoContextMenu_OnOpened">
+                                     Opened="VideoContextMenu_OnOpened"
+                                     Closed="VideoContextMenu_OnClosed">
                             <MenuItem x:Name="PlaybackRateMenuItem" Header="再生速度">
                                 <MenuItem Header="0.25×" Tag="0.25" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
                                 <MenuItem Header="0.5×" Tag="0.5" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
@@ -89,7 +91,9 @@
                 Padding="10,8"
                 Background="{StaticResource PanelBrush}"
                 BorderBrush="{StaticResource BorderBrush}"
-                BorderThickness="0,1,0,0">
+                BorderThickness="0,1,0,0"
+                MouseEnter="PlaybackControls_OnMouseEnter"
+                MouseLeave="PlaybackControls_OnMouseLeave">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />

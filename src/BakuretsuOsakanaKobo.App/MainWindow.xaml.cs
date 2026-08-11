@@ -32,7 +32,9 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _videoProfileSaveTimer;
     private readonly DispatcherTimer _temporaryPlaybackRateTimer;
     private readonly DispatcherTimer _temporaryPlaybackRateReleaseTimer;
+    private readonly DispatcherTimer _fullscreenControlsTimer;
     private readonly TemporaryPlaybackRateGesture _temporaryPlaybackRateGesture = new();
+    private readonly FullscreenControlsState _fullscreenControlsState = new();
     private PortableDataPaths? _paths;
     private ErrorReporter? _errorReporter;
     private IPlaybackBackend? _playbackBackend;
@@ -80,6 +82,11 @@ public partial class MainWindow : Window
             Interval = TemporaryPlaybackRateReleasePollInterval,
         };
         _temporaryPlaybackRateReleaseTimer.Tick += TemporaryPlaybackRateReleaseTimer_OnTick;
+        _fullscreenControlsTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+        {
+            Interval = FullscreenControlsState.AutoHideDelay,
+        };
+        _fullscreenControlsTimer.Tick += FullscreenControlsTimer_OnTick;
         SeekSlider.AddHandler(Thumb.DragStartedEvent, new DragStartedEventHandler(SeekSlider_OnDragStarted));
         SeekSlider.AddHandler(Thumb.DragCompletedEvent, new DragCompletedEventHandler(SeekSlider_OnDragCompleted));
     }
@@ -405,6 +412,8 @@ public partial class MainWindow : Window
         _temporaryPlaybackRateTimer.Tick -= TemporaryPlaybackRateTimer_OnTick;
         _temporaryPlaybackRateReleaseTimer.Stop();
         _temporaryPlaybackRateReleaseTimer.Tick -= TemporaryPlaybackRateReleaseTimer_OnTick;
+        _fullscreenControlsTimer.Stop();
+        _fullscreenControlsTimer.Tick -= FullscreenControlsTimer_OnTick;
         _windowSource?.RemoveHook(WindowMessageHook);
         _windowSource = null;
         SeekSlider.RemoveHandler(Thumb.DragStartedEvent, new DragStartedEventHandler(SeekSlider_OnDragStarted));
@@ -633,6 +642,7 @@ public partial class MainWindow : Window
 
     private void VideoSurface_OnPreviewMouseMove(object sender, MouseEventArgs eventArgs)
     {
+        ShowFullscreenControlsForActivity();
         var point = eventArgs.GetPosition(VideoInteractionSurface);
         if (_temporaryPlaybackRateGesture.CancelIfMoved(
                 point.X,
@@ -765,9 +775,22 @@ public partial class MainWindow : Window
 
     private void VideoContextMenu_OnOpened(object sender, RoutedEventArgs eventArgs)
     {
+        UpdateFullscreenControlsInteraction(isContextMenuOpen: true);
         UpdatePlaybackRateControls();
         FullscreenMenuItem.IsChecked = _isFullscreen;
     }
+
+    private void VideoContextMenu_OnClosed(object sender, RoutedEventArgs eventArgs) =>
+        UpdateFullscreenControlsInteraction(isContextMenuOpen: false);
+
+    private void Window_OnPreviewMouseMove(object sender, MouseEventArgs eventArgs) =>
+        ShowFullscreenControlsForActivity();
+
+    private void PlaybackControls_OnMouseEnter(object sender, MouseEventArgs eventArgs) =>
+        UpdateFullscreenControlsInteraction(isPointerOverControls: true);
+
+    private void PlaybackControls_OnMouseLeave(object sender, MouseEventArgs eventArgs) =>
+        UpdateFullscreenControlsInteraction(isPointerOverControls: false);
 
     private void FullscreenMenuItem_OnClick(object sender, RoutedEventArgs eventArgs)
     {
@@ -822,9 +845,14 @@ public partial class MainWindow : Window
         MainMenu.Visibility = Visibility.Collapsed;
         Grid.SetRow(VideoSurface, 0);
         Grid.SetRowSpan(VideoSurface, 4);
+        MovePlaybackControlsToFullscreenOverlay();
         PlaybackControls.Opacity = 0.94;
         WindowState = WindowState.Maximized;
         _isFullscreen = true;
+        _fullscreenControlsState.EnterFullscreen();
+        _fullscreenControlsState.SetPointerOverControls(PlaybackControls.IsMouseOver);
+        _fullscreenControlsState.SetContextMenuOpen(VideoContextMenu.IsOpen);
+        ShowFullscreenControlsForActivity();
     }
 
     private void ExitFullscreen()
@@ -835,15 +863,98 @@ public partial class MainWindow : Window
         }
 
         EndTemporaryPlaybackRateGesture();
+        _fullscreenControlsTimer.Stop();
+        _fullscreenControlsState.ExitFullscreen();
+        PlaybackControls.Visibility = Visibility.Visible;
         WindowState = WindowState.Normal;
         WindowStyle = _windowStyleBeforeFullscreen;
         ResizeMode = _resizeModeBeforeFullscreen;
         Grid.SetRow(VideoSurface, 1);
         Grid.SetRowSpan(VideoSurface, 1);
+        MovePlaybackControlsToNormalLayout();
         PlaybackControls.Opacity = 1;
         MainMenu.Visibility = Visibility.Visible;
         _isFullscreen = false;
         WindowState = _windowStateBeforeFullscreen;
+    }
+
+    private void MovePlaybackControlsToFullscreenOverlay()
+    {
+        if (!RootLayout.Children.Contains(PlaybackControls))
+        {
+            return;
+        }
+
+        RootLayout.Children.Remove(PlaybackControls);
+        VideoInteractionSurface.Children.Add(PlaybackControls);
+        PlaybackControls.VerticalAlignment = VerticalAlignment.Bottom;
+        Panel.SetZIndex(PlaybackControls, 1);
+    }
+
+    private void MovePlaybackControlsToNormalLayout()
+    {
+        if (!VideoInteractionSurface.Children.Contains(PlaybackControls))
+        {
+            return;
+        }
+
+        VideoInteractionSurface.Children.Remove(PlaybackControls);
+        RootLayout.Children.Add(PlaybackControls);
+        Grid.SetRow(PlaybackControls, 2);
+        PlaybackControls.VerticalAlignment = VerticalAlignment.Stretch;
+        Panel.SetZIndex(PlaybackControls, 0);
+    }
+
+    private void ShowFullscreenControlsForActivity()
+    {
+        if (!_fullscreenControlsState.ShowForActivity())
+        {
+            return;
+        }
+
+        PlaybackControls.Visibility = Visibility.Visible;
+        RestartFullscreenControlsTimerIfIdle();
+    }
+
+    private void UpdateFullscreenControlsInteraction(
+        bool? isPointerOverControls = null,
+        bool? isContextMenuOpen = null)
+    {
+        var isFullscreen = isPointerOverControls is { } pointerState
+            ? _fullscreenControlsState.SetPointerOverControls(pointerState)
+            : _fullscreenControlsState.SetContextMenuOpen(isContextMenuOpen ?? false);
+        if (!isFullscreen)
+        {
+            return;
+        }
+
+        PlaybackControls.Visibility = Visibility.Visible;
+        RestartFullscreenControlsTimerIfIdle();
+    }
+
+    private void RestartFullscreenControlsTimerIfIdle()
+    {
+        _fullscreenControlsTimer.Stop();
+        if (!_fullscreenControlsState.IsInteractionActive)
+        {
+            _fullscreenControlsTimer.Start();
+        }
+    }
+
+    private void FullscreenControlsTimer_OnTick(object? sender, EventArgs eventArgs)
+    {
+        _fullscreenControlsTimer.Stop();
+        _fullscreenControlsState.SetPointerOverControls(PlaybackControls.IsMouseOver);
+        _fullscreenControlsState.SetContextMenuOpen(VideoContextMenu.IsOpen);
+        if (_fullscreenControlsState.IsInteractionActive)
+        {
+            return;
+        }
+
+        if (_fullscreenControlsState.TryHideAfterTimeout())
+        {
+            PlaybackControls.Visibility = Visibility.Collapsed;
+        }
     }
 
     private void PlaybackRateMenuItem_OnClick(object sender, RoutedEventArgs eventArgs)

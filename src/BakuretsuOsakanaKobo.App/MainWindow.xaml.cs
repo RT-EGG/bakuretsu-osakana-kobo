@@ -525,6 +525,7 @@ public partial class MainWindow : Window
 
         SeekSlider.IsEnabled = presentation.IsSeekEnabled;
         SeekSlider.ToolTip = presentation.SeekToolTip;
+        UpdateStartPositionMarker();
         if (_isSeekDragging || DateTime.UtcNow < _seekPresentationHoldUntilUtc)
         {
             return;
@@ -823,6 +824,7 @@ public partial class MainWindow : Window
         try
         {
             profiles.SetStartPosition(path, positionMilliseconds);
+            UpdateStartPositionMarker();
             _videoProfileRevision++;
             _videoProfileSaveTimer.Stop();
             if (await FlushVideoProfilesAsync())
@@ -1322,6 +1324,36 @@ public partial class MainWindow : Window
     private void SeekSlider_OnDragCompleted(object sender, DragCompletedEventArgs eventArgs)
     {
         _isSeekDragging = false;
+    }
+
+    private void SeekSlider_OnSizeChanged(object sender, SizeChangedEventArgs eventArgs) =>
+        UpdateStartPositionMarker();
+
+    private void UpdateStartPositionMarker()
+    {
+        var backend = _playbackBackend;
+        var profiles = _videoProfiles;
+        var durationMilliseconds = backend?.LengthMilliseconds ?? 0;
+        if (backend?.CurrentPath is not { } path ||
+            profiles is null ||
+            durationMilliseconds <= 0 ||
+            !profiles.TryGet(path, out var profile) ||
+            profile.StartPositionMilliseconds is not { } startPositionMilliseconds ||
+            startPositionMilliseconds > durationMilliseconds ||
+            SeekSlider.ActualWidth <= 0)
+        {
+            StartPositionMarker.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        Canvas.SetLeft(
+            StartPositionMarker,
+            SeekUiGeometry.MarkerOffset(
+                startPositionMilliseconds,
+                durationMilliseconds,
+                SeekSlider.ActualWidth,
+                StartPositionMarker.Width));
+        StartPositionMarker.Visibility = Visibility.Visible;
     }
 
     private void ExitMenuItem_OnClick(object sender, RoutedEventArgs e) => Close();

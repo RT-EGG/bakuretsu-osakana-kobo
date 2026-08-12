@@ -81,6 +81,7 @@ internal static class Program
             try
             {
                 var seekSlider = (Slider)window.FindName("SeekSlider");
+                var startPositionMarker = (FrameworkElement)window.FindName("StartPositionMarker");
                 var volumeSlider = (Slider)window.FindName("VolumeSlider");
                 var muteButton = (Button)window.FindName("MuteButton");
                 var volumeText = (TextBlock)window.FindName("VolumeText");
@@ -107,6 +108,7 @@ internal static class Program
                         window,
                         videoSurface,
                         seekSlider,
+                        startPositionMarker,
                         backend,
                         videoProfiles!,
                         profileFilePath,
@@ -334,6 +336,7 @@ internal static class Program
         MainWindow window,
         FrameworkElement videoSurface,
         Slider seekSlider,
+        FrameworkElement startPositionMarker,
         LibVlcPlaybackBackend backend,
         VideoProfileRepository videoProfiles,
         string profileFilePath,
@@ -344,8 +347,13 @@ internal static class Program
             () => backend.TimeMilliseconds is >= 11_500 and <= 15_000,
             TimeSpan.FromSeconds(3),
             "The registered 12-second start position was not restored.");
+        await WaitUntilAsync(
+            () => MarkerMatches(startPositionMarker, 12_000, backend.LengthMilliseconds, seekSlider.ActualWidth),
+            TimeSpan.FromSeconds(3),
+            "The initial registered start-position marker was not displayed at 12 seconds.");
         backend.Pause();
         var initialRestoredMilliseconds = backend.TimeMilliseconds;
+        var initialMarkerOffset = Canvas.GetLeft(startPositionMarker);
 
         seekSlider.Value = 0.5;
         var registrationTargetMilliseconds = backend.LengthMilliseconds / 2;
@@ -371,6 +379,16 @@ internal static class Program
                   Math.Abs(profile.StartPositionMilliseconds.Value - registrationTargetMilliseconds) <= 250,
             TimeSpan.FromSeconds(3),
             "The menu command did not update the registered start position.");
+        await WaitUntilAsync(
+            () => MarkerMatches(
+                startPositionMarker,
+                registrationTargetMilliseconds,
+                backend.LengthMilliseconds,
+                seekSlider.ActualWidth,
+                toleranceMilliseconds: 250),
+            TimeSpan.FromSeconds(3),
+            "The start-position marker did not move immediately after registration.");
+        var registeredMarkerOffset = Canvas.GetLeft(startPositionMarker);
         var notificationText = (TextBlock)window.FindName("NotificationMessageText");
         await WaitUntilAsync(
             () => notificationText.Text.StartsWith("再生開始位置を ", StringComparison.Ordinal),
@@ -393,6 +411,9 @@ internal static class Program
         Ensure(
             backend.TimeMilliseconds <= 2_000,
             "An out-of-range registered position did not fall back to the beginning.");
+        Ensure(
+            startPositionMarker.Visibility == Visibility.Collapsed,
+            "An out-of-range registered start-position marker remained visible.");
         var outOfRangeFallbackMilliseconds = backend.TimeMilliseconds;
 
         videoProfiles.SetStartPosition(backend.CurrentPath!, 15_000);
@@ -402,7 +423,25 @@ internal static class Program
             () => backend.TimeMilliseconds is >= 14_500 and <= 18_000,
             TimeSpan.FromSeconds(3),
             "The final 15-second start position was not restored.");
+        await WaitUntilAsync(
+            () => MarkerMatches(startPositionMarker, 15_000, backend.LengthMilliseconds, seekSlider.ActualWidth),
+            TimeSpan.FromSeconds(3),
+            "The final registered start-position marker was not displayed at 15 seconds.");
         var finalRestoredMilliseconds = backend.TimeMilliseconds;
+        var markerOffsetBeforeResize = Canvas.GetLeft(startPositionMarker);
+        var seekWidthBeforeResize = seekSlider.ActualWidth;
+        window.Width += 160;
+        window.UpdateLayout();
+        await WaitUntilAsync(
+            () => seekSlider.ActualWidth > seekWidthBeforeResize + 100 &&
+                  MarkerMatches(startPositionMarker, 15_000, backend.LengthMilliseconds, seekSlider.ActualWidth),
+            TimeSpan.FromSeconds(3),
+            "The registered start-position marker did not follow the resized seek bar.");
+        var markerOffsetAfterResize = Canvas.GetLeft(startPositionMarker);
+        var seekWidthAfterResize = seekSlider.ActualWidth;
+        Ensure(
+            markerOffsetAfterResize > markerOffsetBeforeResize,
+            "The registered start-position marker offset did not change after resizing.");
 
         backend.Pause();
         seekSlider.Value = 0.75;
@@ -415,14 +454,56 @@ internal static class Program
         return new StartPositionValidation(
             InitialRegisteredMilliseconds: 12_000,
             InitialRestoredMilliseconds: initialRestoredMilliseconds,
+            InitialMarkerOffset: initialMarkerOffset,
             PersistedRegistrationMilliseconds: persistedRegistrationMilliseconds,
+            RegisteredMarkerOffset: registeredMarkerOffset,
             OutOfRangeRegisteredMilliseconds: outOfRangeMilliseconds,
             OutOfRangeFallbackMilliseconds: outOfRangeFallbackMilliseconds,
+            OutOfRangeMarkerHidden: true,
             FinalRegisteredMilliseconds: 15_000,
             FinalRestoredMilliseconds: finalRestoredMilliseconds,
+            SeekWidthBeforeResize: seekWidthBeforeResize,
+            MarkerOffsetBeforeResize: markerOffsetBeforeResize,
+            SeekWidthAfterResize: seekWidthAfterResize,
+            MarkerOffsetAfterResize: markerOffsetAfterResize,
             LastPlaybackPositionMilliseconds: lastPlaybackPositionMilliseconds,
             ConfirmationMessage: notificationText.Text,
             FinalMuted: backend.IsMuted);
+    }
+
+    private static bool MarkerMatches(
+        FrameworkElement marker,
+        long positionMilliseconds,
+        long durationMilliseconds,
+        double trackWidth,
+        long toleranceMilliseconds = 0)
+    {
+        if (marker.Visibility != Visibility.Visible || durationMilliseconds <= 0 || trackWidth <= 0)
+        {
+            return false;
+        }
+
+        var markerOffset = Canvas.GetLeft(marker);
+        if (!double.IsFinite(markerOffset))
+        {
+            return false;
+        }
+
+        var minimumPosition = Math.Max(0, positionMilliseconds - toleranceMilliseconds);
+        var maximumPosition = Math.Min(durationMilliseconds, positionMilliseconds + toleranceMilliseconds);
+        var minimumOffset = ExpectedMarkerOffset(minimumPosition, durationMilliseconds, trackWidth, marker.Width);
+        var maximumOffset = ExpectedMarkerOffset(maximumPosition, durationMilliseconds, trackWidth, marker.Width);
+        return markerOffset >= minimumOffset - 1 && markerOffset <= maximumOffset + 1;
+    }
+
+    private static double ExpectedMarkerOffset(
+        long positionMilliseconds,
+        long durationMilliseconds,
+        double trackWidth,
+        double markerWidth)
+    {
+        var center = Math.Clamp((double)positionMilliseconds / durationMilliseconds, 0, 1) * trackWidth;
+        return Math.Clamp(center - (markerWidth / 2), 0, Math.Max(0, trackWidth - markerWidth));
     }
 
     private static async Task<long> WaitForPersistedStartPositionAsync(
@@ -1423,11 +1504,18 @@ internal static class Program
     private readonly record struct StartPositionValidation(
         long InitialRegisteredMilliseconds,
         long InitialRestoredMilliseconds,
+        double InitialMarkerOffset,
         long PersistedRegistrationMilliseconds,
+        double RegisteredMarkerOffset,
         long OutOfRangeRegisteredMilliseconds,
         long OutOfRangeFallbackMilliseconds,
+        bool OutOfRangeMarkerHidden,
         long FinalRegisteredMilliseconds,
         long FinalRestoredMilliseconds,
+        double SeekWidthBeforeResize,
+        double MarkerOffsetBeforeResize,
+        double SeekWidthAfterResize,
+        double MarkerOffsetAfterResize,
         long LastPlaybackPositionMilliseconds,
         string ConfirmationMessage,
         bool FinalMuted);

@@ -61,6 +61,7 @@ public partial class App : Application
         MainWindow = window;
         _errorReporter = new ErrorReporter(_diagnosticLog, new MainWindowNotificationSink(window));
         var videoProfiles = await InitializeVideoProfilesAsync(paths, _errorReporter);
+        var recentFiles = await InitializeRecentFilesAsync(paths, _errorReporter);
         IPlaybackBackend? playbackBackend = null;
         try
         {
@@ -78,7 +79,7 @@ public partial class App : Application
                 exception);
         }
 
-        window.ConfigureServices(paths, _errorReporter, playbackBackend, videoProfiles);
+        window.ConfigureServices(paths, _errorReporter, playbackBackend, videoProfiles, recentFiles);
         _singleInstanceCoordinator.Diagnostic += SingleInstanceCoordinator_OnDiagnostic;
         RegisterGlobalErrorHandlers();
         window.Show();
@@ -291,6 +292,44 @@ public partial class App : Application
                 exception.Message,
                 exception,
                 paths.VideoProfilesFilePath);
+            return null;
+        }
+    }
+
+    private static async Task<RecentFileRepository?> InitializeRecentFilesAsync(
+        PortableDataPaths paths,
+        ErrorReporter errorReporter)
+    {
+        var repository = new RecentFileRepository(paths.RecentFilesFilePath);
+        try
+        {
+            var loadResult = await repository.LoadAsync();
+            if (loadResult.Warning is not null)
+            {
+                errorReporter.Report(
+                    new UserNotification(
+                        UserNotificationSeverity.Warning,
+                        "最近開いたファイルの履歴を読み込めなかったため、空の履歴で続行します。",
+                        "動画を開くと新しい履歴を保存します。"),
+                    "recent-files-load-recovered",
+                    loadResult.Warning,
+                    targetPath: paths.RecentFilesFilePath);
+            }
+
+            return repository;
+        }
+        catch (Exception exception)
+        {
+            repository.Dispose();
+            errorReporter.Report(
+                new UserNotification(
+                    UserNotificationSeverity.Warning,
+                    "最近開いたファイルの履歴を初期化できませんでした。",
+                    "履歴は保存されませんが、動画の再生は続行できます。"),
+                "recent-files-initialization-failed",
+                exception.Message,
+                exception,
+                paths.RecentFilesFilePath);
             return null;
         }
     }

@@ -41,6 +41,7 @@ public partial class MainWindow : Window
     private ErrorReporter? _errorReporter;
     private IPlaybackBackend? _playbackBackend;
     private VideoProfileRepository? _videoProfiles;
+    private RecentFileRepository? _recentFiles;
     private CancellationTokenSource? _openCancellation;
     private Task? _openTask;
     private bool _isOpeningVideo;
@@ -97,12 +98,14 @@ public partial class MainWindow : Window
         PortableDataPaths paths,
         ErrorReporter errorReporter,
         IPlaybackBackend? playbackBackend,
-        VideoProfileRepository? videoProfiles = null)
+        VideoProfileRepository? videoProfiles = null,
+        RecentFileRepository? recentFiles = null)
     {
         _paths = paths;
         _errorReporter = errorReporter;
         _playbackBackend = playbackBackend;
         _videoProfiles = videoProfiles;
+        _recentFiles = recentFiles;
         OpenVideoMenuItem.IsEnabled = playbackBackend is not null;
 
         if (playbackBackend is LibVlcPlaybackBackend libVlcBackend)
@@ -269,6 +272,7 @@ public partial class MainWindow : Window
                 EmptyStatePanel.Visibility = Visibility.Collapsed;
                 Title = $"{Path.GetFileName(path)} - {ApplicationInfo.DisplayName}";
                 NotificationBorder.Visibility = Visibility.Collapsed;
+                await RecordRecentFileAsync(path);
             }
             else if (!hadCurrentVideo)
             {
@@ -496,7 +500,49 @@ public partial class MainWindow : Window
         _playbackBackend = null;
         _videoProfiles?.Dispose();
         _videoProfiles = null;
+        _recentFiles?.Dispose();
+        _recentFiles = null;
         base.OnClosed(e);
+    }
+
+    private async Task RecordRecentFileAsync(string path)
+    {
+        var recentFiles = _recentFiles;
+        if (recentFiles is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var saveResult = await recentFiles.RecordSuccessfulOpenAsync(path);
+            if (saveResult.Success)
+            {
+                return;
+            }
+
+            _errorReporter?.Report(
+                new UserNotification(
+                    UserNotificationSeverity.Warning,
+                    "最近開いたファイルの履歴を保存できません。",
+                    "再生は続行できます。アプリの配置先に書き込み権限があるか確認してください。"),
+                "recent-files-save-failed",
+                saveResult.ErrorMessage ?? "The recent-file history save failed.",
+                saveResult.Exception,
+                recentFiles.FilePath);
+        }
+        catch (Exception exception)
+        {
+            _errorReporter?.Report(
+                new UserNotification(
+                    UserNotificationSeverity.Warning,
+                    "最近開いたファイルの履歴を保存できません。",
+                    "再生は続行できます。アプリの配置先に書き込み権限があるか確認してください。"),
+                "recent-files-save-unexpected-failure",
+                exception.Message,
+                exception,
+                recentFiles.FilePath);
+        }
     }
 
     private async Task CloseAfterPendingWorkCompletesAsync(Task? openTask)

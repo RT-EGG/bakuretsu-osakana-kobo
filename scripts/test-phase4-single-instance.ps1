@@ -155,6 +155,7 @@ Get-ChildItem -LiteralPath $buildOutput |
 
 $file1 = Join-Path $mediaRoot "初回 日本語 動画.mp4"
 $file2 = Join-Path $mediaRoot "IPC 日本語 動画.wmv"
+$missingFile = Join-Path $mediaRoot "欠損 日本語 動画.mp4"
 Copy-Item -LiteralPath (Join-Path $workspace "test-assets/generated/phase2-1920x1080-5s-30fps-h264-aac.mp4") -Destination $file1
 Copy-Item -LiteralPath (Join-Path $workspace "test-assets/generated/phase2-1920x1080-5s-30fps-wmv9-wma.wmv") -Destination $file2
 
@@ -248,6 +249,18 @@ try {
     if ($launchEvents[3].Message -notmatch "ignore-multiple" -or $null -ne $launchEvents[3].TargetPath) {
         throw "The multiple-argument launch request was not silently ignored."
     }
+
+    $missing = Start-Product -ExecutablePath $executable -Arguments @($missingFile)
+    Wait-ForSecondaryExit -Process $missing -Scenario "missing-file"
+    $secondaryRuns.Add([pscustomobject]@{ Scenario = "missing-file"; ProcessId = $missing.Id; ExitCode = $missing.ExitCode })
+    Wait-Until { (Get-LaunchEvents $logPath).Count -ge 5 } 5000 "The missing-file request was not handled."
+
+    $recentFilesPath = Join-Path $dataRoot "recent-files.json"
+    Wait-Until { Test-Path -LiteralPath $recentFilesPath } 5000 "The recent-file history was not created."
+    $recentFiles = @((Get-Content -LiteralPath $recentFilesPath | ConvertFrom-Json).Files)
+    if ($recentFiles.Count -ne 2 -or $recentFiles[0] -ne $file2 -or $recentFiles[1] -ne $file1) {
+        throw "Recent-file history did not contain only successful opens in newest-first order."
+    }
 }
 catch {
     $errors.Add($_.Exception.ToString())
@@ -274,6 +287,11 @@ $report = [ordered]@{
     secondaryRuns = $secondaryRuns
     foregroundWindowHandleObserved = $foregroundObserved
     launchEvents = @(Get-LaunchEvents $logPath)
+    recentFiles = if (Test-Path -LiteralPath (Join-Path $dataRoot "recent-files.json")) {
+        @((Get-Content -LiteralPath (Join-Path $dataRoot "recent-files.json") | ConvertFrom-Json).Files)
+    } else {
+        @()
+    }
     errors = $errors
 }
 $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $reportPath -Encoding utf8

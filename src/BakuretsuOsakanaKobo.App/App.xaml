@@ -7,5 +7,6 @@
         <SolidColorBrush x:Key="MutedTextBrush" Color="#9DABC0" />
         <SolidColorBrush x:Key="PanelBrush" Color="#151D29" />
         <SolidColorBrush x:Key="BorderBrush" Color="#344156" />
+        <SolidColorBrush x:Key="PrimaryBrush" Color="#47B8FF" />
     </Application.Resources>
 </Application>

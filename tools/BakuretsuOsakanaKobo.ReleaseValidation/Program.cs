@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows;
@@ -34,6 +35,7 @@ internal static class Program
         var validateFullscreen = Environment.GetEnvironmentVariable("BOK_FULLSCREEN_VALIDATION") == "1";
         var validateShortcuts = Environment.GetEnvironmentVariable("BOK_SHORTCUT_VALIDATION") == "1";
         var validateStartPositions = Environment.GetEnvironmentVariable("BOK_START_POSITION_VALIDATION") == "1";
+        var validateFileDrop = Environment.GetEnvironmentVariable("BOK_FILE_DROP_VALIDATION") == "1";
         var profileFilePath = $"{Path.GetFullPath(args[1])}.video-profiles.json";
         VideoProfileRepository? videoProfiles = null;
         if (validateProfiles || validateStartPositions)
@@ -75,6 +77,7 @@ internal static class Program
         var exitCode = 1;
         ProfileDelayValidation? profileDelayValidation = null;
         StartPositionValidation? startPositionValidation = null;
+        FileDropValidation? fileDropValidation = null;
         window.Loaded += async (_, _) =>
         {
             var windowLoadedMilliseconds = processClock.Elapsed.TotalMilliseconds;
@@ -113,6 +116,18 @@ internal static class Program
                         videoProfiles!,
                         profileFilePath,
                         notificationSink);
+                    exitCode = 0;
+                    return;
+                }
+
+                if (validateFileDrop)
+                {
+                    fileDropValidation = await ValidateFileDropAsync(
+                        window,
+                        videoSurface,
+                        seekSlider,
+                        backend,
+                        args[0]);
                     exitCode = 0;
                     return;
                 }
@@ -275,6 +290,19 @@ internal static class Program
                 startPositionValidation,
                 finalRegisteredStartPositionMilliseconds = finalProfile.StartPositionMilliseconds,
                 lastPlaybackPositionWasNotSaved = true,
+                audioDiagnostics = shutdownDiagnostics,
+            };
+            WriteReport(args[1], report);
+            Console.WriteLine(JsonSerializer.Serialize(report));
+        }
+
+        if (validateFileDrop && exitCode == 0)
+        {
+            var report = new
+            {
+                success = true,
+                video = Path.GetFullPath(args[0]),
+                fileDropValidation,
                 audioDiagnostics = shutdownDiagnostics,
             };
             WriteReport(args[1], report);
@@ -529,6 +557,127 @@ internal static class Program
         }
 
         throw new TimeoutException("The registered start position was not persisted within three seconds.");
+    }
+
+    private static async Task<FileDropValidation> ValidateFileDropAsync(
+        MainWindow window,
+        FrameworkElement videoSurface,
+        Slider seekSlider,
+        LibVlcPlaybackBackend backend,
+        string videoPath)
+    {
+        Ensure(backend.IsMuted, "File-drop validation must remain muted.");
+        var overlay = (FrameworkElement)window.FindName("DropTargetOverlay");
+        var dropTargetText = (TextBlock)window.FindName("DropTargetText");
+        var notificationText = (TextBlock)window.FindName("NotificationMessageText");
+
+        var supportedEnter = RaiseFileDragEvent(
+            videoSurface,
+            DragDrop.PreviewDragEnterEvent,
+            [Path.GetFullPath(videoPath)]);
+        Ensure(supportedEnter.Handled, "The supported-file drag-enter event was not handled.");
+        Ensure(supportedEnter.Effects == DragDropEffects.Copy, "A supported file did not advertise the Copy effect.");
+        Ensure(overlay.Visibility == Visibility.Visible, "The approved file-drop overlay was not visible.");
+        Ensure(dropTargetText.Text == "動画をドロップして開く", "The supported-file drop feedback was incorrect.");
+
+        var dragLeave = RaiseFileDragEvent(
+            videoSurface,
+            DragDrop.PreviewDragLeaveEvent,
+            [Path.GetFullPath(videoPath)]);
+        Ensure(dragLeave.Handled, "The drag-leave event was not handled.");
+        Ensure(overlay.Visibility == Visibility.Collapsed, "The file-drop overlay remained visible after drag leave.");
+
+        backend.Pause();
+        seekSlider.Value = 0.4;
+        var preservedTargetMilliseconds = backend.LengthMilliseconds * 0.4;
+        await WaitUntilAsync(
+            () => Math.Abs(backend.TimeMilliseconds - preservedTargetMilliseconds) <= 250,
+            TimeSpan.FromSeconds(3),
+            "Could not prepare playback state for rejected file drops.");
+        var originalPath = backend.CurrentPath;
+        var originalRate = backend.Rate;
+        var positionBeforeRejectedDrops = backend.TimeMilliseconds;
+
+        var multipleDrop = RaiseFileDragEvent(
+            videoSurface,
+            DragDrop.PreviewDropEvent,
+            [Path.GetFullPath(videoPath), Path.GetFullPath(videoPath)]);
+        Ensure(multipleDrop.Handled, "The multiple-file drop was not handled.");
+        Ensure(
+            notificationText.Text == "メインウィンドウでは1ファイルだけ指定してください。",
+            "The multiple-file guidance was not shown.");
+        Ensure(backend.CurrentPath == originalPath, "A multiple-file drop changed the current video.");
+        Ensure(!backend.IsPlaying, "A multiple-file drop changed the paused playback state.");
+        Ensure(
+            Math.Abs(backend.TimeMilliseconds - positionBeforeRejectedDrops) <= 250,
+            "A multiple-file drop changed the playback position.");
+
+        var unsupportedDrop = RaiseFileDragEvent(
+            videoSurface,
+            DragDrop.PreviewDropEvent,
+            [Path.ChangeExtension(Path.GetFullPath(videoPath), ".avi")]);
+        Ensure(unsupportedDrop.Handled, "The unsupported-file drop was not handled.");
+        Ensure(
+            notificationText.Text == "MP4またはWMVファイルを指定してください。",
+            "The unsupported-file guidance was not shown.");
+        Ensure(backend.CurrentPath == originalPath, "An unsupported-file drop changed the current video.");
+        Ensure(!backend.IsPlaying, "An unsupported-file drop changed the paused playback state.");
+        Ensure(PlaybackRate.AreEqual(backend.Rate, originalRate), "A rejected file drop changed playback rate.");
+        Ensure(
+            !window.IsTemporaryPlaybackRatePending && !window.IsTemporaryPlaybackRateActive,
+            "A rejected external file drop conflicted with the temporary playback-rate gesture.");
+
+        Ensure(backend.TrySetRate(2.0f), "Could not prepare the single-file drop rate-reset check.");
+        var singleDrop = RaiseFileDragEvent(
+            videoSurface,
+            DragDrop.PreviewDropEvent,
+            [Path.GetFullPath(videoPath)]);
+        Ensure(singleDrop.Handled, "The single-file drop was not handled.");
+        await WaitUntilAsync(
+            () => backend.CurrentPath == Path.GetFullPath(videoPath) &&
+                  backend.IsPlaying &&
+                  PlaybackRate.AreEqual(backend.Rate, PlaybackRate.Default) &&
+                  backend.TimeMilliseconds < 5_000,
+            TimeSpan.FromSeconds(6),
+            "A supported single-file drop did not reopen and autoplay through the product path.");
+        Ensure(overlay.Visibility == Visibility.Collapsed, "The file-drop overlay remained after a successful drop.");
+        Ensure(
+            !window.IsTemporaryPlaybackRatePending && !window.IsTemporaryPlaybackRateActive,
+            "A supported external file drop activated the temporary playback-rate gesture.");
+
+        return new FileDropValidation(
+            SupportedDragEffect: supportedEnter.Effects.ToString(),
+            ApprovedOverlayShown: true,
+            MultipleDropPreservedPath: true,
+            MultipleDropPreservedPositionMilliseconds: positionBeforeRejectedDrops,
+            UnsupportedDropPreservedPath: true,
+            SingleDropAutoplayed: true,
+            SingleDropResetRate: backend.Rate,
+            TemporaryRateGestureInactive: true,
+            FinalMuted: backend.IsMuted);
+    }
+
+    private static DragEventArgs RaiseFileDragEvent(
+        FrameworkElement target,
+        RoutedEvent routedEvent,
+        string[] paths)
+    {
+        var data = new DataObject(DataFormats.FileDrop, paths);
+        var eventArgs = (DragEventArgs?)Activator.CreateInstance(
+            typeof(DragEventArgs),
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            [
+                data,
+                DragDropKeyStates.None,
+                DragDropEffects.Copy,
+                target,
+                new Point(target.ActualWidth / 2, target.ActualHeight / 2),
+            ],
+            culture: null) ?? throw new InvalidOperationException("Could not construct WPF drag event arguments.");
+        eventArgs.RoutedEvent = routedEvent;
+        target.RaiseEvent(eventArgs);
+        return eventArgs;
     }
 
     private static async Task<RealtimeAudioDiagnostics> ValidateNaturalDrainAsync(
@@ -1473,6 +1622,7 @@ internal static class Program
         resources["MutedTextBrush"] = new SolidColorBrush(Color.FromRgb(0x9D, 0xAB, 0xC0));
         resources["PanelBrush"] = new SolidColorBrush(Color.FromRgb(0x15, 0x1D, 0x29));
         resources["BorderBrush"] = new SolidColorBrush(Color.FromRgb(0x34, 0x41, 0x56));
+        resources["PrimaryBrush"] = new SolidColorBrush(Color.FromRgb(0x47, 0xB8, 0xFF));
     }
 
     private sealed class RecordingDiagnosticLog : IDiagnosticLog
@@ -1518,6 +1668,17 @@ internal static class Program
         double MarkerOffsetAfterResize,
         long LastPlaybackPositionMilliseconds,
         string ConfirmationMessage,
+        bool FinalMuted);
+
+    private readonly record struct FileDropValidation(
+        string SupportedDragEffect,
+        bool ApprovedOverlayShown,
+        bool MultipleDropPreservedPath,
+        long MultipleDropPreservedPositionMilliseconds,
+        bool UnsupportedDropPreservedPath,
+        bool SingleDropAutoplayed,
+        float SingleDropResetRate,
+        bool TemporaryRateGestureInactive,
         bool FinalMuted);
 
     private sealed class RecordingNotificationSink : IUserNotificationSink

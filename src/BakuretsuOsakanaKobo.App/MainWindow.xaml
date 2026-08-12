@@ -12,8 +12,13 @@
         Foreground="{StaticResource TextBrush}"
         UseLayoutRounding="True"
         SnapsToDevicePixels="True"
+        AllowDrop="True"
         PreviewKeyDown="Window_OnPreviewKeyDown"
         PreviewMouseMove="Window_OnPreviewMouseMove"
+        PreviewDragEnter="Window_OnPreviewDragEnter"
+        PreviewDragOver="Window_OnPreviewDragOver"
+        PreviewDragLeave="Window_OnPreviewDragLeave"
+        PreviewDrop="Window_OnPreviewDrop"
         AutomationProperties.Name="爆裂おさかな工房">
     <Grid x:Name="RootLayout">
         <Grid.RowDefinitions>
@@ -45,12 +50,17 @@
                 <Grid x:Name="VideoInteractionSurface"
                       Background="#01000000"
                       Focusable="True"
+                      AllowDrop="True"
                       PreviewKeyDown="Window_OnPreviewKeyDown"
                       PreviewMouseWheel="VideoSurface_OnPreviewMouseWheel"
                       PreviewMouseLeftButtonDown="VideoSurface_OnPreviewMouseLeftButtonDown"
                       PreviewMouseLeftButtonUp="VideoSurface_OnPreviewMouseLeftButtonUp"
                       PreviewMouseMove="VideoSurface_OnPreviewMouseMove"
-                      LostMouseCapture="VideoSurface_OnLostMouseCapture">
+                      LostMouseCapture="VideoSurface_OnLostMouseCapture"
+                      PreviewDragEnter="Window_OnPreviewDragEnter"
+                      PreviewDragOver="Window_OnPreviewDragOver"
+                      PreviewDragLeave="Window_OnPreviewDragLeave"
+                      PreviewDrop="Window_OnPreviewDrop">
                     <Grid.ContextMenu>
                         <ContextMenu x:Name="VideoContextMenu"
                                      Opened="VideoContextMenu_OnOpened"
@@ -85,8 +95,30 @@
                                    Margin="0,10,0,0"
                                    HorizontalAlignment="Center"
                                    Foreground="{StaticResource MutedTextBrush}"
-                                   Text="「ファイル」→「開く」からmp4またはwmvを選択してください" />
+                                   Text="MP4 または WMV をここにドラッグ＆ドロップできます" />
                     </StackPanel>
+                    <Border x:Name="DropTargetOverlay"
+                            Margin="24"
+                            Background="#E6172635"
+                            BorderBrush="{StaticResource PrimaryBrush}"
+                            BorderThickness="2"
+                            CornerRadius="10"
+                            Visibility="Collapsed"
+                            IsHitTestVisible="False"
+                            AutomationProperties.Name="ファイルドロップ先">
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock HorizontalAlignment="Center"
+                                       FontSize="42"
+                                       Foreground="{StaticResource PrimaryBrush}"
+                                       Text="↓" />
+                            <TextBlock x:Name="DropTargetText"
+                                       Margin="0,10,0,0"
+                                       HorizontalAlignment="Center"
+                                       FontSize="20"
+                                       FontWeight="SemiBold"
+                                       Text="動画をドロップして開く" />
+                        </StackPanel>
+                    </Border>
                 </Grid>
             </vlc:VideoView>
         </Grid>

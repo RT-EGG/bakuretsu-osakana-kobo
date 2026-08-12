@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.ComponentModel;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -195,19 +196,34 @@ public partial class MainWindow : Window
             return;
         }
 
+        await OpenVideoFromUserRequestAsync(dialog.FileName);
+    }
+
+    private async Task OpenVideoFromUserRequestAsync(string path)
+    {
+        if (_playbackBackend is null || _openTask is not null || _closeRequested)
+        {
+            return;
+        }
+
         _isOpeningVideo = true;
-        UpdatePlaybackButton();
-        UpdatePlaybackTimeline();
-        UpdateVolumeControls();
-        UpdatePlaybackRateControls();
-        _openTask = OpenVideoAsync(dialog.FileName);
+        var openTask = OpenVideoAsync(path);
+        _openTask = openTask;
         try
         {
-            await _openTask;
+            UpdatePlaybackButton();
+            UpdatePlaybackTimeline();
+            UpdateVolumeControls();
+            UpdatePlaybackRateControls();
+            await openTask;
         }
         finally
         {
-            _openTask = null;
+            if (ReferenceEquals(_openTask, openTask))
+            {
+                _openTask = null;
+            }
+
             _isOpeningVideo = false;
             if (!_closeRequested)
             {
@@ -667,6 +683,82 @@ public partial class MainWindow : Window
                 SystemParameters.MinimumVerticalDragDistance))
         {
             EndTemporaryPlaybackRateGesture();
+        }
+    }
+
+    private void Window_OnPreviewDragEnter(object sender, DragEventArgs eventArgs) =>
+        UpdateDropFeedback(eventArgs);
+
+    private void Window_OnPreviewDragOver(object sender, DragEventArgs eventArgs) =>
+        UpdateDropFeedback(eventArgs);
+
+    private void Window_OnPreviewDragLeave(object sender, DragEventArgs eventArgs)
+    {
+        DropTargetOverlay.Visibility = Visibility.Collapsed;
+        eventArgs.Handled = true;
+    }
+
+    private async void Window_OnPreviewDrop(object sender, DragEventArgs eventArgs)
+    {
+        DropTargetOverlay.Visibility = Visibility.Collapsed;
+        var request = ClassifyDrop(eventArgs.Data);
+        eventArgs.Handled = true;
+        EndTemporaryPlaybackRateGesture();
+
+        switch (request.Kind)
+        {
+            case FileDropRequestKind.SingleSupportedFile:
+                await OpenVideoFromUserRequestAsync(request.Path!);
+                break;
+            case FileDropRequestKind.MultipleFiles:
+                ShowNotification(new UserNotification(
+                    UserNotificationSeverity.Information,
+                    "メインウィンドウでは1ファイルだけ指定してください。",
+                    "動画を1ファイルだけ選び、もう一度ドロップしてください。"));
+                break;
+            case FileDropRequestKind.UnsupportedFile:
+                ShowNotification(new UserNotification(
+                    UserNotificationSeverity.Error,
+                    "MP4またはWMVファイルを指定してください。",
+                    "対応する動画ファイルを選び直してください。"));
+                break;
+        }
+    }
+
+    private void UpdateDropFeedback(DragEventArgs eventArgs)
+    {
+        var request = _openTask is null && !_closeRequested
+            ? ClassifyDrop(eventArgs.Data)
+            : new FileDropRequest(FileDropRequestKind.None);
+        DropTargetOverlay.Visibility = request.Kind == FileDropRequestKind.None
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        eventArgs.Effects = request.Kind == FileDropRequestKind.SingleSupportedFile
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
+        DropTargetText.Text = request.Kind switch
+        {
+            FileDropRequestKind.SingleSupportedFile => "動画をドロップして開く",
+            FileDropRequestKind.MultipleFiles => "1ファイルだけ指定してください",
+            FileDropRequestKind.UnsupportedFile => "MP4またはWMVを指定してください",
+            _ => string.Empty,
+        };
+        eventArgs.Handled = true;
+    }
+
+    private static FileDropRequest ClassifyDrop(IDataObject data)
+    {
+        try
+        {
+            var paths = data.GetDataPresent(DataFormats.FileDrop)
+                ? data.GetData(DataFormats.FileDrop) as string[] ?? []
+                : [];
+            return FileDropRequestClassifier.Classify(paths);
+        }
+        catch (Exception exception) when (
+            exception is COMException or ExternalException or InvalidOperationException)
+        {
+            return new FileDropRequest(FileDropRequestKind.None);
         }
     }
 

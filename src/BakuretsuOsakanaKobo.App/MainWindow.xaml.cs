@@ -320,6 +320,42 @@ public partial class MainWindow : Window
         TogglePlayPause();
     }
 
+    internal async Task HandleLaunchRequestAsync(LaunchRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        BringToForeground();
+        if (request.FileArguments.Length != 1 || _closeRequested)
+        {
+            return;
+        }
+
+        if (_openTask is { } pendingOpen)
+        {
+            await pendingOpen;
+        }
+
+        await OpenVideoFromUserRequestAsync(request.FileArguments[0]);
+    }
+
+    private void BringToForeground()
+    {
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
+
+        Show();
+        Activate();
+        Topmost = true;
+        Topmost = false;
+        Focus();
+        _ = SetForegroundWindow(new WindowInteropHelper(this).Handle);
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetForegroundWindow(IntPtr window);
+
     private void TogglePlayPause()
     {
         if (_playbackBackend?.CurrentPath is null || _openTask is not null)

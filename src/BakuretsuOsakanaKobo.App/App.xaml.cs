@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using System.Windows;
 using System.Windows.Threading;
 using BakuretsuOsakanaKobo.Infrastructure.Diagnostics;
@@ -11,10 +12,46 @@ public partial class App : Application
 {
     private IDiagnosticLog? _diagnosticLog;
     private ErrorReporter? _errorReporter;
+    private SingleInstanceCoordinator? _singleInstanceCoordinator;
+    private readonly Channel<LaunchRequest> _secondaryLaunchRequests =
+        Channel.CreateBounded<LaunchRequest>(new BoundedChannelOptions(16)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = true,
+            SingleWriter = true,
+        });
+    private readonly CancellationTokenSource _secondaryLaunchCancellation = new();
+    private readonly TaskCompletionSource _initialLaunchHandled =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private Task? _secondaryLaunchTask;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        _singleInstanceCoordinator = new SingleInstanceCoordinator();
+        if (!_singleInstanceCoordinator.IsPrimary)
+        {
+            var forwarded = await _singleInstanceCoordinator.SendAsync(new LaunchRequest
+            {
+                SenderProcessId = Environment.ProcessId,
+                FileArguments = e.Args,
+            });
+            Shutdown(forwarded ? 0 : 1);
+            return;
+        }
+
+        _singleInstanceCoordinator.RequestReceived += HandleSecondaryLaunchRequestAsync;
+        if (!_secondaryLaunchRequests.Writer.TryWrite(new LaunchRequest
+            {
+                SenderProcessId = Environment.ProcessId,
+                FileArguments = e.Args,
+                IsInitialLaunch = true,
+            }))
+        {
+            throw new InvalidOperationException("The initial launch request could not be queued.");
+        }
+        _singleInstanceCoordinator.StartListening();
 
         var paths = PortableDataPaths.ForCurrentProcess();
         var logResult = FileDiagnosticLog.TryOpen(paths.LogsDirectory);
@@ -42,6 +79,7 @@ public partial class App : Application
         }
 
         window.ConfigureServices(paths, _errorReporter, playbackBackend, videoProfiles);
+        _singleInstanceCoordinator.Diagnostic += SingleInstanceCoordinator_OnDiagnostic;
         RegisterGlobalErrorHandlers();
         window.Show();
 
@@ -49,6 +87,14 @@ public partial class App : Application
             DiagnosticSeverity.Information,
             "application-started",
             "The application main window was shown."));
+
+        _secondaryLaunchTask = ProcessSecondaryLaunchRequestsAsync(window, _secondaryLaunchCancellation.Token);
+        _ = _secondaryLaunchTask.ContinueWith(
+            static task => _ = task.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        await _initialLaunchHandled.Task;
 
         if (logResult.Exception is not null)
         {
@@ -84,13 +130,89 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         UnregisterGlobalErrorHandlers();
+        _secondaryLaunchRequests.Writer.TryComplete();
+        _secondaryLaunchCancellation.Cancel();
+        if (_singleInstanceCoordinator is not null)
+        {
+            _singleInstanceCoordinator.RequestReceived -= HandleSecondaryLaunchRequestAsync;
+            _singleInstanceCoordinator.Diagnostic -= SingleInstanceCoordinator_OnDiagnostic;
+            _singleInstanceCoordinator.Dispose();
+            _singleInstanceCoordinator = null;
+        }
         _diagnosticLog?.Write(new DiagnosticEvent(
             DiagnosticSeverity.Information,
             "application-exiting",
             "The application is exiting."));
         _diagnosticLog?.Dispose();
         _diagnosticLog = null;
+        _secondaryLaunchCancellation.Dispose();
         base.OnExit(e);
+    }
+
+    private Task HandleSecondaryLaunchRequestAsync(LaunchRequest request)
+    {
+        if (!_secondaryLaunchRequests.Writer.TryWrite(request))
+        {
+            throw new InvalidOperationException("The secondary launch request queue is unavailable or full.");
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task ProcessSecondaryLaunchRequestsAsync(
+        MainWindow window,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var request in _secondaryLaunchRequests.Reader.ReadAllAsync(cancellationToken))
+            {
+                await Dispatcher.InvokeAsync(
+                    () => HandleLaunchRequestAsync(window, request),
+                    DispatcherPriority.Normal,
+                    cancellationToken).Task.Unwrap();
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _initialLaunchHandled.TrySetCanceled(cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            _initialLaunchHandled.TrySetException(exception);
+            throw;
+        }
+    }
+
+    private async Task HandleLaunchRequestAsync(MainWindow window, LaunchRequest request)
+    {
+        await window.HandleLaunchRequestAsync(request);
+        var action = request.FileArguments.Length switch
+        {
+            0 => "activate-only",
+            1 => "open-one",
+            _ => "ignore-multiple",
+        };
+        _diagnosticLog?.Write(new DiagnosticEvent(
+            DiagnosticSeverity.Information,
+            "launch-request-handled",
+            $"Launch request action: {action}; initial: {request.IsInitialLaunch}; sender PID: {request.SenderProcessId}.",
+            TargetPath: request.FileArguments.Length == 1 ? request.FileArguments[0] : null));
+        if (request.IsInitialLaunch)
+        {
+            _initialLaunchHandled.TrySetResult();
+        }
+    }
+
+    private void SingleInstanceCoordinator_OnDiagnostic(
+        object? sender,
+        SingleInstanceDiagnosticEventArgs eventArgs)
+    {
+        _diagnosticLog?.Write(new DiagnosticEvent(
+            eventArgs.Exception is null ? DiagnosticSeverity.Information : DiagnosticSeverity.Warning,
+            $"single-instance-{eventArgs.EventCode}",
+            eventArgs.Message ?? eventArgs.EventCode,
+            eventArgs.Exception));
     }
 
     private static async Task InitializeSettingsAsync(

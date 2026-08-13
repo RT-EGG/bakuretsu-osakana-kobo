@@ -40,6 +40,38 @@ public sealed class PlaylistRepositoryTests
     }
 
     [Fact]
+    public async Task AddEntriesAsync_AppendsAllEntriesAndPreservesDuplicates()
+    {
+        using var directory = new TestDirectory();
+        var first = Path.Combine(directory.Path, "first.mp4");
+        var second = Path.Combine(directory.Path, "second.wmv");
+        using var repository = CreateRepository(directory.Path);
+        await repository.LoadAsync();
+        Assert.True((await repository.AddEntriesAsync([first])).Success);
+
+        Assert.True((await repository.AddEntriesAsync([second, first])).Success);
+
+        Assert.Equal(
+            [Path.GetFullPath(first), Path.GetFullPath(second), Path.GetFullPath(first)],
+            repository.GetSnapshot().Entries);
+        using var reloaded = CreateRepository(directory.Path);
+        Assert.False((await reloaded.LoadAsync()).UsedDefault);
+        Assert.Equal(repository.GetSnapshot().Entries, reloaded.GetSnapshot().Entries);
+    }
+
+    [Fact]
+    public async Task AddEntriesAsync_RejectsEmptyRequestWithoutChangingHistory()
+    {
+        using var directory = new TestDirectory();
+        using var repository = CreateRepository(directory.Path);
+        await repository.LoadAsync();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => repository.AddEntriesAsync([]));
+
+        Assert.Empty(repository.GetSnapshot().Entries);
+    }
+
+    [Fact]
     public async Task LoadAsync_BacksUpInvalidRelativePathAndUsesDefault()
     {
         using var directory = new TestDirectory();

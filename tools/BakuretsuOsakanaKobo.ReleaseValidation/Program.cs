@@ -406,7 +406,7 @@ internal static class Program
             var loaded = verifier.LoadAsync().GetAwaiter().GetResult();
             Ensure(loaded.Warning is null, loaded.Warning ?? "Final playlist load failed.");
             var snapshot = verifier.GetSnapshot();
-            Ensure(snapshot.Entries.Count == 3, "Final playlist entry count changed.");
+            Ensure(snapshot.Entries.Count == 5, "Final playlist additions were not persisted.");
             Ensure(!snapshot.Loop, "Final playlist loop state was not persisted as off.");
             var report = new
             {
@@ -438,6 +438,8 @@ internal static class Program
         var playlistWindow = Application.Current.Windows.OfType<PlaylistWindow>().Single();
         var playlistList = (ListBox)playlistWindow.FindName("PlaylistList");
         var loopToggle = (System.Windows.Controls.Primitives.ToggleButton)playlistWindow.FindName("LoopToggle");
+        var addCurrentButton = (Button)playlistWindow.FindName("AddCurrentButton");
+        var notificationText = (TextBlock)playlistWindow.FindName("NotificationText");
         var entries = playlistList.Items.Cast<PlaylistEntryPresentation>().ToArray();
         Ensure(playlistWindow.Width == 680 && playlistWindow.Height == 540, "Playlist window initial size changed.");
         Ensure(playlistWindow.MinWidth == 560 && playlistWindow.MinHeight == 400, "Playlist window minimum size changed.");
@@ -447,6 +449,39 @@ internal static class Program
         Ensure(!entries[0].IsMissing && entries[1].IsMissing && !entries[2].IsMissing, "Missing playlist state was incorrect.");
         Ensure(loopToggle.IsChecked == true, "Persisted loop-on state was not restored.");
         Ensure(Equals(loopToggle.Content, "↻  ループ ON"), "Restored loop label was incorrect.");
+        Ensure(addCurrentButton.IsEnabled, "Add-current must be enabled while a video is open.");
+
+        addCurrentButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, addCurrentButton));
+        await WaitUntilAsync(
+            () => repository.GetSnapshot().Entries.Count == 4 && addCurrentButton.IsEnabled,
+            TimeSpan.FromSeconds(5),
+            "Current video was not appended to the playlist.");
+        Ensure(
+            repository.GetSnapshot().Entries.Count(path =>
+                string.Equals(path, entries[0].Path, StringComparison.OrdinalIgnoreCase)) == 3,
+            "Adding the current video did not preserve a third duplicate entry.");
+
+        var unsupportedPath = Path.Combine(Path.GetDirectoryName(entries[0].Path)!, "ignored.txt");
+        var dragOver = RaiseFileDragEvent(
+            playlistWindow,
+            DragDrop.PreviewDragOverEvent,
+            [entries[0].Path, unsupportedPath]);
+        Ensure(
+            dragOver.Handled && dragOver.Effects == DragDropEffects.Copy,
+            "Mixed playlist drop did not advertise Copy.");
+        var drop = RaiseFileDragEvent(
+            playlistWindow,
+            DragDrop.PreviewDropEvent,
+            [entries[0].Path, unsupportedPath]);
+        Ensure(drop.Handled, "Playlist drop was not handled.");
+        await WaitUntilAsync(
+            () => repository.GetSnapshot().Entries.Count == 5 && addCurrentButton.IsEnabled,
+            TimeSpan.FromSeconds(5),
+            "Supported item from a mixed playlist drop was not appended.");
+        Ensure(
+            notificationText.Text.Contains("1件を追加", StringComparison.Ordinal) &&
+            notificationText.Text.Contains("1件は追加しませんでした", StringComparison.Ordinal),
+            "Mixed playlist drop summary was incorrect.");
 
         loopToggle.IsChecked = false;
         await WaitUntilAsync(
@@ -471,6 +506,9 @@ internal static class Program
 
         return new PlaylistValidation(
             EntryCount: entries.Length,
+            CurrentVideoAdded: true,
+            MixedDropAddedSupportedOnly: true,
+            FinalEntryCount: repository.GetSnapshot().Entries.Count,
             DuplicateEntriesPreserved: true,
             MissingEntriesMarked: true,
             InitialLoopRestored: true,
@@ -1950,6 +1988,9 @@ internal static class Program
 
     private readonly record struct PlaylistValidation(
         int EntryCount,
+        bool CurrentVideoAdded,
+        bool MixedDropAddedSupportedOnly,
+        int FinalEntryCount,
         bool DuplicateEntriesPreserved,
         bool MissingEntriesMarked,
         bool InitialLoopRestored,

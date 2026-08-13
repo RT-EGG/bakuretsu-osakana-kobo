@@ -11,9 +11,13 @@
         Foreground="{StaticResource TextBrush}"
         UseLayoutRounding="True"
         SnapsToDevicePixels="True"
+        AllowDrop="True"
+        PreviewDragOver="Window_OnPreviewDragOver"
+        PreviewDrop="Window_OnPreviewDrop"
         AutomationProperties.Name="プレイリスト">
     <Grid>
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
@@ -37,13 +41,17 @@
                         Style="{StaticResource PlaylistPrimaryButtonStyle}"
                         IsEnabled="False"
                         Content="▶  再生" />
-                <Button Margin="8,0,0,0"
+                <Button x:Name="AddCurrentButton"
+                        Margin="8,0,0,0"
                         Style="{StaticResource PlaylistButtonStyle}"
                         IsEnabled="False"
+                        Click="AddCurrentButton_OnClick"
                         Content="現在の動画を追加" />
-                <Button Margin="8,0,0,0"
+                <Button x:Name="AddFilesButton"
+                        Margin="8,0,0,0"
                         Style="{StaticResource PlaylistButtonStyle}"
                         IsEnabled="False"
+                        Click="AddFilesButton_OnClick"
                         Content="ファイルを追加…" />
                 <Button Margin="8,0,0,0"
                         Style="{StaticResource PlaylistButtonStyle}"
@@ -52,7 +60,22 @@
             </WrapPanel>
         </DockPanel>
 
-        <Grid Grid.Row="1" Margin="12,0,12,12">
+        <Border x:Name="NotificationBar"
+                Grid.Row="1"
+                Margin="12,0,12,8"
+                Padding="10,7"
+                Background="#192A38"
+                BorderBrush="#41769B"
+                BorderThickness="1"
+                CornerRadius="5"
+                Visibility="Collapsed"
+                AutomationProperties.LiveSetting="Polite">
+            <TextBlock x:Name="NotificationText"
+                       TextWrapping="Wrap"
+                       AutomationProperties.LiveSetting="Polite" />
+        </Border>
+
+        <Grid Grid.Row="2" Margin="12,0,12,12">
             <ListBox x:Name="PlaylistList"
                      Background="{StaticResource PanelBrush}"
                      Foreground="{StaticResource TextBrush}"

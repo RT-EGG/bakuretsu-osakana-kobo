@@ -61,6 +61,22 @@ public sealed class PlaylistRepository : IDisposable
             cancellationToken);
     }
 
+    public Task<JsonSaveResult> AddEntriesAsync(
+        IEnumerable<string> entries,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        var normalizedEntries = entries.Select(VideoProfilePath.Normalize).ToArray();
+        if (normalizedEntries.Length == 0)
+        {
+            throw new ArgumentException("At least one playlist entry is required.", nameof(entries));
+        }
+
+        return MutateAndSaveAsync(
+            () => _entries.AddRange(normalizedEntries),
+            cancellationToken);
+    }
+
     public Task<JsonSaveResult> SetLoopAsync(
         bool loop,
         CancellationToken cancellationToken = default) =>

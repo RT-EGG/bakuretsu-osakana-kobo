@@ -265,11 +265,13 @@ public partial class MainWindow : Window
         var playlistWindow = new PlaylistWindow(
             snapshot.Entries,
             snapshot.Loop,
-            canPersistLoop: _playlist is not null)
+            canPersist: _playlist is not null && _playlistMutationTask is null,
+            currentMediaPath: _playbackBackend?.CurrentPath)
         {
             Owner = this,
         };
         playlistWindow.LoopChanged += PlaylistWindow_OnLoopChanged;
+        playlistWindow.EntriesAddRequested += PlaylistWindow_OnEntriesAddRequested;
         playlistWindow.Closed += PlaylistWindow_OnClosed;
         _playlistWindow = playlistWindow;
         playlistWindow.Show();
@@ -281,9 +283,17 @@ public partial class MainWindow : Window
     {
         var playlist = _playlist;
         var playlistWindow = sender as PlaylistWindow;
-        if (playlist is null || _playlistMutationTask is not null || _closeRequested)
+        if (playlist is null || _closeRequested)
         {
-            playlistWindow?.CompleteLoopSave();
+            if (playlistWindow is not null)
+            {
+                playlistWindow.CompletePersistence(playlist?.GetSnapshot().Entries ?? []);
+            }
+            return;
+        }
+
+        if (_playlistMutationTask is not null)
+        {
             return;
         }
 
@@ -295,7 +305,9 @@ public partial class MainWindow : Window
         catch (Exception exception)
         {
             ReportPlaylistSaveFailure(exception, playlist.FilePath);
-            playlistWindow?.CompleteLoopSave();
+            playlistWindow?.CompletePersistence(
+                playlist.GetSnapshot().Entries,
+                enablePersistence: true);
             return;
         }
 
@@ -323,7 +335,83 @@ public partial class MainWindow : Window
 
             if (!_closeRequested)
             {
-                playlistWindow?.CompleteLoopSave();
+                var entries = playlist.GetSnapshot().Entries;
+                playlistWindow?.CompletePersistence(entries, enablePersistence: true);
+                if (_playlistWindow is { } activeWindow &&
+                    !ReferenceEquals(activeWindow, playlistWindow))
+                {
+                    activeWindow.CompletePersistence(entries, enablePersistence: true);
+                }
+            }
+        }
+    }
+
+    private async void PlaylistWindow_OnEntriesAddRequested(
+        object? sender,
+        PlaylistEntriesAddRequestedEventArgs eventArgs)
+    {
+        var playlist = _playlist;
+        var playlistWindow = sender as PlaylistWindow;
+        if (playlist is null || _closeRequested)
+        {
+            playlistWindow?.CompletePersistence(playlist?.GetSnapshot().Entries ?? []);
+            return;
+        }
+
+        if (_playlistMutationTask is not null)
+        {
+            return;
+        }
+
+        Task<JsonSaveResult> mutationTask;
+        try
+        {
+            mutationTask = playlist.AddEntriesAsync(eventArgs.Paths);
+        }
+        catch (Exception exception)
+        {
+            ReportPlaylistSaveFailure(exception, playlist.FilePath);
+            playlistWindow?.CompletePersistence(
+                playlist.GetSnapshot().Entries,
+                enablePersistence: true);
+            return;
+        }
+
+        _playlistMutationTask = mutationTask;
+        try
+        {
+            var result = await mutationTask;
+            if (!result.Success)
+            {
+                ReportPlaylistSaveFailure(
+                    result.Exception ?? new IOException(result.ErrorMessage),
+                    playlist.FilePath);
+            }
+        }
+        catch (Exception exception)
+        {
+            ReportPlaylistSaveFailure(exception, playlist.FilePath);
+        }
+        finally
+        {
+            if (ReferenceEquals(_playlistMutationTask, mutationTask))
+            {
+                _playlistMutationTask = null;
+            }
+
+            if (!_closeRequested)
+            {
+                var entries = playlist.GetSnapshot().Entries;
+                playlistWindow?.CompletePersistence(
+                    entries,
+                    eventArgs.Paths.Count,
+                    eventArgs.RejectedCount,
+                    enablePersistence: true);
+                if (_playlistWindow is { } activeWindow &&
+                    !ReferenceEquals(activeWindow, playlistWindow))
+                {
+                    activeWindow.CompletePersistence(entries, enablePersistence: true);
+                }
             }
         }
     }
@@ -333,6 +421,7 @@ public partial class MainWindow : Window
         if (sender is PlaylistWindow playlistWindow)
         {
             playlistWindow.LoopChanged -= PlaylistWindow_OnLoopChanged;
+            playlistWindow.EntriesAddRequested -= PlaylistWindow_OnEntriesAddRequested;
             playlistWindow.Closed -= PlaylistWindow_OnClosed;
         }
 
@@ -410,6 +499,7 @@ public partial class MainWindow : Window
                 EmptyStatePanel.Visibility = Visibility.Collapsed;
                 Title = $"{Path.GetFileName(path)} - {ApplicationInfo.DisplayName}";
                 NotificationBorder.Visibility = Visibility.Collapsed;
+                _playlistWindow?.UpdateCurrentMedia(path);
                 await RecordRecentFileAsync(path);
             }
             else if (!hadCurrentVideo)
@@ -622,6 +712,7 @@ public partial class MainWindow : Window
         if (_playlistWindow is not null)
         {
             _playlistWindow.LoopChanged -= PlaylistWindow_OnLoopChanged;
+            _playlistWindow.EntriesAddRequested -= PlaylistWindow_OnEntriesAddRequested;
             _playlistWindow.Closed -= PlaylistWindow_OnClosed;
             _playlistWindow.Close();
             _playlistWindow = null;

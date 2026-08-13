@@ -78,6 +78,32 @@ public sealed class RecentFileRepository : IDisposable
         }
     }
 
+    public Task<JsonSaveResult> RemoveAsync(
+        string videoPath,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedPath = VideoProfilePath.Normalize(videoPath);
+        return MutateAndSaveAsync(
+            files => files.RemoveAll(path =>
+                string.Equals(path, normalizedPath, StringComparison.OrdinalIgnoreCase)),
+            cancellationToken);
+    }
+
+    public Task<JsonSaveResult> RemoveMissingAsync(CancellationToken cancellationToken = default) =>
+        MutateAndSaveAsync(
+            files => files.RemoveAll(path => !File.Exists(path)),
+            cancellationToken);
+
+    public Task<JsonSaveResult> ClearAsync(CancellationToken cancellationToken = default) =>
+        MutateAndSaveAsync(
+            files =>
+            {
+                var removedCount = files.Count;
+                files.Clear();
+                return removedCount;
+            },
+            cancellationToken);
+
     public async Task<JsonSaveResult> SaveAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
@@ -112,6 +138,30 @@ public sealed class RecentFileRepository : IDisposable
         }
 
         _saveGate.Dispose();
+    }
+
+    private async Task<JsonSaveResult> MutateAndSaveAsync(
+        Func<List<string>, int> mutation,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        await _saveGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            RecentFileDocument snapshot;
+            lock (_sync)
+            {
+                ThrowIfNotReady();
+                mutation(_files);
+                snapshot = CreateSnapshot();
+            }
+
+            return await _store.SaveAsync(snapshot, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _saveGate.Release();
+        }
     }
 
     private RecentFileDocument CreateSnapshot() => new()

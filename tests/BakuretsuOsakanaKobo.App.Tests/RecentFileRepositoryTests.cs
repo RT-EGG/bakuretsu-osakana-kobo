@@ -146,17 +146,61 @@ public sealed class RecentFileRepositoryTests
     }
 
     [Fact]
-    public async Task MissingFilesRemainInHistoryUntilExplicitUiRemovalIsImplemented()
+    public async Task RemoveAsync_RemovesOnlyMatchingPathCaseInsensitively()
     {
         using var directory = new TestDirectory();
-        var missingPath = Path.Combine(directory.Path, "missing.mp4");
+        var firstPath = Path.Combine(directory.Path, "first.mp4");
+        var secondPath = Path.Combine(directory.Path, "second.wmv");
         using var repository = CreateRepository(directory.Path);
         await repository.LoadAsync();
+        Assert.True((await repository.RecordSuccessfulOpenAsync(firstPath)).Success);
+        Assert.True((await repository.RecordSuccessfulOpenAsync(secondPath)).Success);
 
-        Assert.True((await repository.RecordSuccessfulOpenAsync(missingPath)).Success);
+        Assert.True((await repository.RemoveAsync(firstPath.ToUpperInvariant())).Success);
 
-        Assert.False(File.Exists(missingPath));
-        Assert.Equal([Path.GetFullPath(missingPath)], repository.GetFiles());
+        Assert.Equal([Path.GetFullPath(secondPath)], repository.GetFiles());
+        using var reloadedRepository = CreateRepository(directory.Path);
+        Assert.False((await reloadedRepository.LoadAsync()).UsedDefault);
+        Assert.Equal([Path.GetFullPath(secondPath)], reloadedRepository.GetFiles());
+    }
+
+    [Fact]
+    public async Task RemoveMissingAsync_KeepsExistingFilesAndRemovesAllMissingFiles()
+    {
+        using var directory = new TestDirectory();
+        var existingPath = Path.Combine(directory.Path, "existing.mp4");
+        var firstMissingPath = Path.Combine(directory.Path, "missing-1.mp4");
+        var secondMissingPath = Path.Combine(directory.Path, "missing-2.wmv");
+        await File.WriteAllTextAsync(existingPath, string.Empty);
+        using var repository = CreateRepository(directory.Path);
+        await repository.LoadAsync();
+        Assert.True((await repository.RecordSuccessfulOpenAsync(firstMissingPath)).Success);
+        Assert.True((await repository.RecordSuccessfulOpenAsync(existingPath)).Success);
+        Assert.True((await repository.RecordSuccessfulOpenAsync(secondMissingPath)).Success);
+
+        Assert.True((await repository.RemoveMissingAsync()).Success);
+
+        Assert.Equal([Path.GetFullPath(existingPath)], repository.GetFiles());
+        using var reloadedRepository = CreateRepository(directory.Path);
+        Assert.False((await reloadedRepository.LoadAsync()).UsedDefault);
+        Assert.Equal([Path.GetFullPath(existingPath)], reloadedRepository.GetFiles());
+    }
+
+    [Fact]
+    public async Task ClearAsync_RemovesAndPersistsAllHistory()
+    {
+        using var directory = new TestDirectory();
+        using var repository = CreateRepository(directory.Path);
+        await repository.LoadAsync();
+        Assert.True((await repository.RecordSuccessfulOpenAsync(
+            Path.Combine(directory.Path, "video.mp4"))).Success);
+
+        Assert.True((await repository.ClearAsync()).Success);
+
+        Assert.Empty(repository.GetFiles());
+        using var reloadedRepository = CreateRepository(directory.Path);
+        Assert.False((await reloadedRepository.LoadAsync()).UsedDefault);
+        Assert.Empty(reloadedRepository.GetFiles());
     }
 
     private static RecentFileRepository CreateRepository(string directory) =>

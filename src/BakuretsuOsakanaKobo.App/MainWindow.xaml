@@ -34,6 +34,9 @@
                           Header="開く(_O)..."
                           IsEnabled="False"
                           Click="OpenVideoMenuItem_OnClick" />
+                <MenuItem x:Name="RecentFilesMenuItem"
+                          Header="最近開いたファイル(_R)"
+                          Click="RecentFilesMenuItem_OnClick" />
                 <Separator />
                 <MenuItem Header="データフォルダーを開く(_D)" Click="OpenDataFolderMenuItem_OnClick" />
                 <Separator />

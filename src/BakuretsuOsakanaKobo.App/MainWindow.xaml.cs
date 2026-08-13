@@ -52,6 +52,7 @@ public partial class MainWindow : Window
     private long _videoProfileRevision;
     private long _savedVideoProfileRevision;
     private Task<JsonSaveResult>? _videoProfileSaveTask;
+    private Task? _recentFileMutationTask;
     private DateTime _seekPresentationHoldUntilUtc;
     private bool _closeRequested;
     private bool _allowClose;
@@ -107,6 +108,7 @@ public partial class MainWindow : Window
         _videoProfiles = videoProfiles;
         _recentFiles = recentFiles;
         OpenVideoMenuItem.IsEnabled = playbackBackend is not null;
+        RebuildRecentFilesMenu();
 
         if (playbackBackend is LibVlcPlaybackBackend libVlcBackend)
         {
@@ -200,6 +202,39 @@ public partial class MainWindow : Window
         }
 
         await OpenVideoFromUserRequestAsync(dialog.FileName);
+    }
+
+    private async void RecentFilesMenuItem_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        if (eventArgs.OriginalSource is not MenuItem menuItem || _closeRequested)
+        {
+            return;
+        }
+
+        switch (menuItem.Tag)
+        {
+            case OpenRecentFileAction openAction:
+                eventArgs.Handled = true;
+                await OpenVideoFromUserRequestAsync(openAction.Path);
+                if (!_closeRequested)
+                {
+                    RebuildRecentFilesMenu();
+                }
+                break;
+            case RemoveRecentFileAction removeAction:
+                eventArgs.Handled = true;
+                await RunRecentFileMutationAsync(
+                    repository => repository.RemoveAsync(removeAction.Path));
+                break;
+            case RemoveAllMissingRecentFilesAction:
+                eventArgs.Handled = true;
+                await RunRecentFileMutationAsync(repository => repository.RemoveMissingAsync());
+                break;
+            case ClearRecentFilesAction:
+                eventArgs.Handled = true;
+                await RunRecentFileMutationAsync(repository => repository.ClearAsync());
+                break;
+        }
     }
 
     private async Task OpenVideoFromUserRequestAsync(string path)
@@ -460,10 +495,11 @@ public partial class MainWindow : Window
                 VolumeSlider.IsEnabled = false;
                 MuteButton.IsEnabled = false;
                 PlaybackRateMenuItem.IsEnabled = false;
+                RecentFilesMenuItem.IsEnabled = false;
                 VideoContextMenu.IsOpen = false;
                 _openCancellation?.Cancel();
                 _videoProfileSaveTimer.Stop();
-                _ = CloseAfterPendingWorkCompletesAsync(_openTask);
+                _ = CloseAfterPendingWorkCompletesAsync(_openTask, _recentFileMutationTask);
             }
 
             return;
@@ -516,20 +552,12 @@ public partial class MainWindow : Window
         try
         {
             var saveResult = await recentFiles.RecordSuccessfulOpenAsync(path);
-            if (saveResult.Success)
+            if (!_closeRequested)
             {
-                return;
+                RebuildRecentFilesMenu();
             }
 
-            _errorReporter?.Report(
-                new UserNotification(
-                    UserNotificationSeverity.Warning,
-                    "最近開いたファイルの履歴を保存できません。",
-                    "再生は続行できます。アプリの配置先に書き込み権限があるか確認してください。"),
-                "recent-files-save-failed",
-                saveResult.ErrorMessage ?? "The recent-file history save failed.",
-                saveResult.Exception,
-                recentFiles.FilePath);
+            ReportRecentFileSaveFailure(saveResult, recentFiles.FilePath);
         }
         catch (Exception exception)
         {
@@ -545,7 +573,148 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task CloseAfterPendingWorkCompletesAsync(Task? openTask)
+    private async Task RunRecentFileMutationAsync(
+        Func<RecentFileRepository, Task<JsonSaveResult>> mutation)
+    {
+        var recentFiles = _recentFiles;
+        if (recentFiles is null || _recentFileMutationTask is not null || _closeRequested)
+        {
+            return;
+        }
+
+        RecentFilesMenuItem.IsEnabled = false;
+        Task<JsonSaveResult> mutationTask;
+        try
+        {
+            mutationTask = mutation(recentFiles);
+        }
+        catch (Exception exception)
+        {
+            ReportRecentFileUnexpectedFailure(exception, recentFiles.FilePath);
+            RebuildRecentFilesMenu();
+            RecentFilesMenuItem.IsEnabled = true;
+            return;
+        }
+
+        _recentFileMutationTask = mutationTask;
+        try
+        {
+            var saveResult = await mutationTask;
+            ReportRecentFileSaveFailure(saveResult, recentFiles.FilePath);
+        }
+        catch (Exception exception)
+        {
+            ReportRecentFileUnexpectedFailure(exception, recentFiles.FilePath);
+        }
+        finally
+        {
+            if (ReferenceEquals(_recentFileMutationTask, mutationTask))
+            {
+                _recentFileMutationTask = null;
+            }
+
+            if (!_closeRequested)
+            {
+                RebuildRecentFilesMenu();
+                RecentFilesMenuItem.IsEnabled = true;
+            }
+        }
+    }
+
+    private void RebuildRecentFilesMenu()
+    {
+        RecentFilesMenuItem.Items.Clear();
+        var presentation = RecentFileMenuPresentation.From(_recentFiles?.GetFiles() ?? []);
+        if (presentation.Files.Count == 0)
+        {
+            RecentFilesMenuItem.Items.Add(new MenuItem
+            {
+                Header = "（履歴はありません）",
+                IsEnabled = false,
+            });
+            return;
+        }
+
+        foreach (var file in presentation.Files)
+        {
+            RecentFilesMenuItem.Items.Add(new MenuItem
+            {
+                Header = file.IsMissing
+                    ? $"{file.DisplayName}（見つかりません）"
+                    : file.DisplayName,
+                ToolTip = file.Path,
+                Tag = new OpenRecentFileAction(file.Path),
+                IsEnabled = !file.IsMissing && _playbackBackend is not null,
+            });
+        }
+
+        if (presentation.MissingFiles.Count > 0)
+        {
+            RecentFilesMenuItem.Items.Add(new Separator());
+            var removeMissingMenu = new MenuItem { Header = "欠損した項目を履歴から削除" };
+            foreach (var file in presentation.MissingFiles)
+            {
+                removeMissingMenu.Items.Add(new MenuItem
+                {
+                    Header = file.DisplayName,
+                    ToolTip = file.Path,
+                    Tag = new RemoveRecentFileAction(file.Path),
+                });
+            }
+
+            if (presentation.ShowRemoveAllMissing)
+            {
+                removeMissingMenu.Items.Add(new Separator());
+                removeMissingMenu.Items.Add(new MenuItem
+                {
+                    Header = "すべて削除",
+                    Tag = new RemoveAllMissingRecentFilesAction(),
+                });
+            }
+
+            RecentFilesMenuItem.Items.Add(removeMissingMenu);
+        }
+
+        RecentFilesMenuItem.Items.Add(new Separator());
+        RecentFilesMenuItem.Items.Add(new MenuItem
+        {
+            Header = "履歴をすべて消去",
+            Tag = new ClearRecentFilesAction(),
+        });
+    }
+
+    private void ReportRecentFileSaveFailure(JsonSaveResult saveResult, string targetPath)
+    {
+        if (saveResult.Success)
+        {
+            return;
+        }
+
+        _errorReporter?.Report(
+            new UserNotification(
+                UserNotificationSeverity.Warning,
+                "最近開いたファイルの履歴を保存できません。",
+                "再生は続行できます。アプリの配置先に書き込み権限があるか確認してください。"),
+            "recent-files-save-failed",
+            saveResult.ErrorMessage ?? "The recent-file history save failed.",
+            saveResult.Exception,
+            targetPath);
+    }
+
+    private void ReportRecentFileUnexpectedFailure(Exception exception, string targetPath) =>
+        _errorReporter?.Report(
+            new UserNotification(
+                UserNotificationSeverity.Warning,
+                "最近開いたファイルの履歴を保存できません。",
+                "再生は続行できます。アプリの配置先に書き込み権限があるか確認してください。"),
+            "recent-files-save-unexpected-failure",
+            exception.Message,
+            exception,
+            targetPath);
+
+    private async Task CloseAfterPendingWorkCompletesAsync(
+        Task? openTask,
+        Task? recentFileMutationTask)
     {
         // OnClosing must return before Close is requested again when there is no pending work.
         await Dispatcher.Yield(DispatcherPriority.Background);
@@ -555,6 +724,11 @@ public partial class MainWindow : Window
             if (openTask is not null)
             {
                 await openTask;
+            }
+
+            if (recentFileMutationTask is not null)
+            {
+                await recentFileMutationTask;
             }
         }
         catch (OperationCanceledException)
@@ -578,6 +752,14 @@ public partial class MainWindow : Window
         _allowClose = true;
         Close();
     }
+
+    private sealed record OpenRecentFileAction(string Path);
+
+    private sealed record RemoveRecentFileAction(string Path);
+
+    private sealed record RemoveAllMissingRecentFilesAction;
+
+    private sealed record ClearRecentFilesAction;
 
     private void ShowEmptyState()
     {

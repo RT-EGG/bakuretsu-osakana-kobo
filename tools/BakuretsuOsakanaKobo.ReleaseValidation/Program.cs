@@ -36,6 +36,7 @@ internal static class Program
         var validateShortcuts = Environment.GetEnvironmentVariable("BOK_SHORTCUT_VALIDATION") == "1";
         var validateStartPositions = Environment.GetEnvironmentVariable("BOK_START_POSITION_VALIDATION") == "1";
         var validateFileDrop = Environment.GetEnvironmentVariable("BOK_FILE_DROP_VALIDATION") == "1";
+        var validateRecentFiles = Environment.GetEnvironmentVariable("BOK_RECENT_FILES_VALIDATION") == "1";
         var profileFilePath = $"{Path.GetFullPath(args[1])}.video-profiles.json";
         VideoProfileRepository? videoProfiles = null;
         if (validateProfiles || validateStartPositions)
@@ -57,6 +58,34 @@ internal static class Program
             Ensure(initialSave.Success, initialSave.ErrorMessage ?? "Initial video profile save failed.");
         }
 
+        var recentFilePath = $"{Path.GetFullPath(args[1])}.recent-files.json";
+        RecentFileRepository? recentFiles = null;
+        string? secondaryVideoPath = null;
+        if (validateRecentFiles)
+        {
+            var reportDirectory = Path.GetDirectoryName(Path.GetFullPath(args[1]))!;
+            Directory.CreateDirectory(reportDirectory);
+            secondaryVideoPath = Path.Combine(
+                reportDirectory,
+                $"recent-secondary{Path.GetExtension(args[0])}");
+            File.Copy(args[0], secondaryVideoPath, overwrite: true);
+            recentFiles = new RecentFileRepository(recentFilePath);
+            recentFiles.LoadAsync().GetAwaiter().GetResult();
+            var clear = recentFiles.ClearAsync().GetAwaiter().GetResult();
+            Ensure(clear.Success, clear.ErrorMessage ?? "Initial recent-file cleanup failed.");
+            foreach (var path in new[]
+                     {
+                         Path.Combine(reportDirectory, "missing-three.wmv"),
+                         Path.Combine(reportDirectory, "missing-two.mp4"),
+                         Path.Combine(reportDirectory, "missing-one.wmv"),
+                         secondaryVideoPath,
+                     })
+            {
+                var save = recentFiles.RecordSuccessfulOpenAsync(path).GetAwaiter().GetResult();
+                Ensure(save.Success, save.ErrorMessage ?? "Initial recent-file save failed.");
+            }
+        }
+
         var application = new Application();
         AddProductResources(application.Resources);
         var window = new MainWindow
@@ -72,12 +101,14 @@ internal static class Program
             new PortableDataPaths(AppContext.BaseDirectory),
             new ErrorReporter(diagnosticLog, notificationSink),
             backend,
-            videoProfiles);
+            videoProfiles,
+            recentFiles);
 
         var exitCode = 1;
         ProfileDelayValidation? profileDelayValidation = null;
         StartPositionValidation? startPositionValidation = null;
         FileDropValidation? fileDropValidation = null;
+        RecentFileValidation? recentFileValidation = null;
         window.Loaded += async (_, _) =>
         {
             var windowLoadedMilliseconds = processClock.Elapsed.TotalMilliseconds;
@@ -94,6 +125,17 @@ internal static class Program
                 Ensure(!volumeSlider.IsEnabled && !muteButton.IsEnabled, "Volume controls must start disabled.");
                 var openMetrics = await MeasureOpenAsync(window, seekSlider, backend, args[0]);
                 var lengthMilliseconds = backend.LengthMilliseconds;
+                if (validateRecentFiles)
+                {
+                    recentFileValidation = await ValidateRecentFilesAsync(
+                        window,
+                        backend,
+                        recentFiles!,
+                        secondaryVideoPath!);
+                    exitCode = 0;
+                    return;
+                }
+
                 if (validateProfiles)
                 {
                     profileDelayValidation = await ValidateVideoProfilesAsync(
@@ -309,7 +351,101 @@ internal static class Program
             Console.WriteLine(JsonSerializer.Serialize(report));
         }
 
+        if (validateRecentFiles && exitCode == 0)
+        {
+            using var verifier = new RecentFileRepository(recentFilePath);
+            var loaded = verifier.LoadAsync().GetAwaiter().GetResult();
+            Ensure(loaded.Warning is null, loaded.Warning ?? "Final recent-file history load failed.");
+            Ensure(verifier.GetFiles().Count == 0, "Clear history was not persisted.");
+            var report = new
+            {
+                success = true,
+                video = Path.GetFullPath(args[0]),
+                recentFilePath,
+                recentFileValidation,
+                finalHistoryCount = verifier.GetFiles().Count,
+                audioDiagnostics = shutdownDiagnostics,
+            };
+            WriteReport(args[1], report);
+            Console.WriteLine(JsonSerializer.Serialize(report));
+        }
+
         return exitCode;
+    }
+
+    private static async Task<RecentFileValidation> ValidateRecentFilesAsync(
+        MainWindow window,
+        LibVlcPlaybackBackend backend,
+        RecentFileRepository repository,
+        string secondaryVideoPath)
+    {
+        var recentMenu = (MenuItem)window.FindName("RecentFilesMenuItem");
+        Ensure(recentMenu.Items.Count == 9, "Recent-file menu did not include five files and management commands.");
+        var fileItems = recentMenu.Items.OfType<MenuItem>().Take(5).ToArray();
+        Ensure(fileItems.Count(item => item.IsEnabled) == 2, "Only existing recent files must be enabled.");
+        Ensure(
+            fileItems.Count(item => item.Header?.ToString()?.EndsWith("（見つかりません）", StringComparison.Ordinal) == true) == 3,
+            "Missing recent files were not labelled.");
+        Ensure(
+            fileItems.All(item => item.ReadLocalValue(Control.ForegroundProperty) == DependencyProperty.UnsetValue),
+            "Dynamic recent-file items must inherit the menu foreground.");
+
+        fileItems[1].RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, fileItems[1]));
+        await WaitUntilAsync(
+            () => string.Equals(backend.CurrentPath, secondaryVideoPath, StringComparison.OrdinalIgnoreCase),
+            TimeSpan.FromSeconds(10),
+            "Selecting an existing recent file did not reopen it.");
+        await WaitUntilAsync(
+            () => string.Equals(repository.GetFiles()[0], secondaryVideoPath, StringComparison.OrdinalIgnoreCase),
+            TimeSpan.FromSeconds(5),
+            "Reopened recent file was not moved to the front.");
+
+        var removeMenu = recentMenu.Items.OfType<MenuItem>()
+            .Single(item => Equals(item.Header, "欠損した項目を履歴から削除"));
+        var individualRemove = (MenuItem)removeMenu.Items[0];
+        var removedPath = individualRemove.ToolTip!.ToString()!;
+        individualRemove.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, individualRemove));
+        await WaitUntilAsync(
+            () =>
+                !repository.GetFiles().Contains(removedPath, StringComparer.OrdinalIgnoreCase) &&
+                recentMenu.IsEnabled,
+            TimeSpan.FromSeconds(5),
+            "Individual missing recent file was not removed.");
+
+        removeMenu = recentMenu.Items.OfType<MenuItem>()
+            .Single(item => Equals(item.Header, "欠損した項目を履歴から削除"));
+        var removeAllMissing = removeMenu.Items.OfType<MenuItem>()
+            .Single(item => Equals(item.Header, "すべて削除"));
+        removeAllMissing.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, removeAllMissing));
+        await WaitUntilAsync(
+            () => repository.GetFiles().All(File.Exists) && recentMenu.IsEnabled,
+            TimeSpan.FromSeconds(5),
+            "Bulk missing-file removal did not preserve only existing paths.");
+
+        var clearHistory = recentMenu.Items.OfType<MenuItem>()
+            .Single(item => Equals(item.Header, "履歴をすべて消去"));
+        clearHistory.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, clearHistory));
+        await WaitUntilAsync(
+            () => repository.GetFiles().Count == 0 &&
+                  recentMenu.IsEnabled &&
+                  recentMenu.Items.Count == 1,
+            TimeSpan.FromSeconds(5),
+            "Clear history did not remove every path.");
+        Ensure(
+            recentMenu.Items.Count == 1 &&
+            recentMenu.Items[0] is MenuItem { IsEnabled: false } emptyItem &&
+            Equals(emptyItem.Header, "（履歴はありません）"),
+            "Cleared history did not render the empty-state item.");
+
+        return new RecentFileValidation(
+            InitialFileCount: 5,
+            EnabledFileCount: 2,
+            MissingFileCount: 3,
+            ReopenedPath: backend.CurrentPath!,
+            IndividualRemovalPersisted: true,
+            BulkMissingRemovalPersisted: true,
+            ClearHistoryPersisted: true,
+            ForegroundInherited: true);
     }
 
     private static async Task<ProfileDelayValidation> ValidateVideoProfilesAsync(
@@ -1680,6 +1816,16 @@ internal static class Program
         float SingleDropResetRate,
         bool TemporaryRateGestureInactive,
         bool FinalMuted);
+
+    private readonly record struct RecentFileValidation(
+        int InitialFileCount,
+        int EnabledFileCount,
+        int MissingFileCount,
+        string ReopenedPath,
+        bool IndividualRemovalPersisted,
+        bool BulkMissingRemovalPersisted,
+        bool ClearHistoryPersisted,
+        bool ForegroundInherited);
 
     private sealed class RecordingNotificationSink : IUserNotificationSink
     {

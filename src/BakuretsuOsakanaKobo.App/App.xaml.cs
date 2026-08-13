@@ -62,6 +62,7 @@ public partial class App : Application
         _errorReporter = new ErrorReporter(_diagnosticLog, new MainWindowNotificationSink(window));
         var videoProfiles = await InitializeVideoProfilesAsync(paths, _errorReporter);
         var recentFiles = await InitializeRecentFilesAsync(paths, _errorReporter);
+        var playlist = await InitializePlaylistAsync(paths, _errorReporter);
         IPlaybackBackend? playbackBackend = null;
         try
         {
@@ -79,7 +80,7 @@ public partial class App : Application
                 exception);
         }
 
-        window.ConfigureServices(paths, _errorReporter, playbackBackend, videoProfiles, recentFiles);
+        window.ConfigureServices(paths, _errorReporter, playbackBackend, videoProfiles, recentFiles, playlist);
         _singleInstanceCoordinator.Diagnostic += SingleInstanceCoordinator_OnDiagnostic;
         RegisterGlobalErrorHandlers();
         window.Show();
@@ -330,6 +331,44 @@ public partial class App : Application
                 exception.Message,
                 exception,
                 paths.RecentFilesFilePath);
+            return null;
+        }
+    }
+
+    private static async Task<PlaylistRepository?> InitializePlaylistAsync(
+        PortableDataPaths paths,
+        ErrorReporter errorReporter)
+    {
+        var repository = new PlaylistRepository(paths.PlaylistFilePath);
+        try
+        {
+            var loadResult = await repository.LoadAsync();
+            if (loadResult.Warning is not null)
+            {
+                errorReporter.Report(
+                    new UserNotification(
+                        UserNotificationSeverity.Warning,
+                        "プレイリストを読み込めなかったため、空の状態で続行します。",
+                        "必要な動画をもう一度追加してください。"),
+                    "playlist-load-recovered",
+                    loadResult.Warning,
+                    targetPath: paths.PlaylistFilePath);
+            }
+
+            return repository;
+        }
+        catch (Exception exception)
+        {
+            repository.Dispose();
+            errorReporter.Report(
+                new UserNotification(
+                    UserNotificationSeverity.Warning,
+                    "プレイリストを初期化できませんでした。",
+                    "プレイリストは保存されませんが、動画の再生は続行できます。"),
+                "playlist-initialization-failed",
+                exception.Message,
+                exception,
+                paths.PlaylistFilePath);
             return null;
         }
     }

@@ -14,6 +14,7 @@ public sealed class PortableDataPaths
         SettingsFilePath = Path.Combine(DataDirectory, "settings.json");
         VideoProfilesFilePath = Path.Combine(DataDirectory, "video-profiles.json");
         RecentFilesFilePath = Path.Combine(DataDirectory, "recent-files.json");
+        PlaylistFilePath = Path.Combine(DataDirectory, "playlist.json");
     }
 
     public string ExecutableDirectory { get; }
@@ -27,6 +28,8 @@ public sealed class PortableDataPaths
     public string VideoProfilesFilePath { get; }
 
     public string RecentFilesFilePath { get; }
+
+    public string PlaylistFilePath { get; }
 
     public static PortableDataPaths ForCurrentProcess() => new(AppContext.BaseDirectory);
 

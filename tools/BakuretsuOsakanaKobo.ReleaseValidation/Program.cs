@@ -37,6 +37,7 @@ internal static class Program
         var validateStartPositions = Environment.GetEnvironmentVariable("BOK_START_POSITION_VALIDATION") == "1";
         var validateFileDrop = Environment.GetEnvironmentVariable("BOK_FILE_DROP_VALIDATION") == "1";
         var validateRecentFiles = Environment.GetEnvironmentVariable("BOK_RECENT_FILES_VALIDATION") == "1";
+        var validatePlaylist = Environment.GetEnvironmentVariable("BOK_PLAYLIST_VALIDATION") == "1";
         var profileFilePath = $"{Path.GetFullPath(args[1])}.video-profiles.json";
         VideoProfileRepository? videoProfiles = null;
         if (validateProfiles || validateStartPositions)
@@ -86,6 +87,26 @@ internal static class Program
             }
         }
 
+        var playlistFilePath = $"{Path.GetFullPath(args[1])}.playlist.json";
+        PlaylistRepository? playlist = null;
+        if (validatePlaylist)
+        {
+            var reportDirectory = Path.GetDirectoryName(Path.GetFullPath(args[1]))!;
+            Directory.CreateDirectory(reportDirectory);
+            playlist = new PlaylistRepository(playlistFilePath);
+            playlist.LoadAsync().GetAwaiter().GetResult();
+            var existingPath = Path.GetFullPath(args[0]);
+            var saveEntries = playlist.ReplaceEntriesAsync(
+            [
+                existingPath,
+                Path.Combine(reportDirectory, "missing-playlist.wmv"),
+                existingPath,
+            ]).GetAwaiter().GetResult();
+            Ensure(saveEntries.Success, saveEntries.ErrorMessage ?? "Initial playlist save failed.");
+            var saveLoop = playlist.SetLoopAsync(true).GetAwaiter().GetResult();
+            Ensure(saveLoop.Success, saveLoop.ErrorMessage ?? "Initial playlist loop save failed.");
+        }
+
         var application = new Application();
         AddProductResources(application.Resources);
         var window = new MainWindow
@@ -102,13 +123,15 @@ internal static class Program
             new ErrorReporter(diagnosticLog, notificationSink),
             backend,
             videoProfiles,
-            recentFiles);
+            recentFiles,
+            playlist);
 
         var exitCode = 1;
         ProfileDelayValidation? profileDelayValidation = null;
         StartPositionValidation? startPositionValidation = null;
         FileDropValidation? fileDropValidation = null;
         RecentFileValidation? recentFileValidation = null;
+        PlaylistValidation? playlistValidation = null;
         window.Loaded += async (_, _) =>
         {
             var windowLoadedMilliseconds = processClock.Elapsed.TotalMilliseconds;
@@ -125,6 +148,13 @@ internal static class Program
                 Ensure(!volumeSlider.IsEnabled && !muteButton.IsEnabled, "Volume controls must start disabled.");
                 var openMetrics = await MeasureOpenAsync(window, seekSlider, backend, args[0]);
                 var lengthMilliseconds = backend.LengthMilliseconds;
+                if (validatePlaylist)
+                {
+                    playlistValidation = await ValidatePlaylistAsync(window, playlist!);
+                    exitCode = 0;
+                    return;
+                }
+
                 if (validateRecentFiles)
                 {
                     recentFileValidation = await ValidateRecentFilesAsync(
@@ -370,7 +400,86 @@ internal static class Program
             Console.WriteLine(JsonSerializer.Serialize(report));
         }
 
+        if (validatePlaylist && exitCode == 0)
+        {
+            using var verifier = new PlaylistRepository(playlistFilePath);
+            var loaded = verifier.LoadAsync().GetAwaiter().GetResult();
+            Ensure(loaded.Warning is null, loaded.Warning ?? "Final playlist load failed.");
+            var snapshot = verifier.GetSnapshot();
+            Ensure(snapshot.Entries.Count == 3, "Final playlist entry count changed.");
+            Ensure(!snapshot.Loop, "Final playlist loop state was not persisted as off.");
+            var report = new
+            {
+                success = true,
+                video = Path.GetFullPath(args[0]),
+                playlistFilePath,
+                playlistValidation,
+                finalEntryCount = snapshot.Entries.Count,
+                finalLoop = snapshot.Loop,
+                audioDiagnostics = shutdownDiagnostics,
+            };
+            WriteReport(args[1], report);
+            Console.WriteLine(JsonSerializer.Serialize(report));
+        }
+
         return exitCode;
+    }
+
+    private static async Task<PlaylistValidation> ValidatePlaylistAsync(
+        MainWindow window,
+        PlaylistRepository repository)
+    {
+        var playlistMenu = (MenuItem)window.FindName("PlaylistMenuItem");
+        playlistMenu.IsChecked = true;
+        await WaitUntilAsync(
+            () => Application.Current.Windows.OfType<PlaylistWindow>().Count() == 1,
+            TimeSpan.FromSeconds(5),
+            "Playlist window was not shown.");
+        var playlistWindow = Application.Current.Windows.OfType<PlaylistWindow>().Single();
+        var playlistList = (ListBox)playlistWindow.FindName("PlaylistList");
+        var loopToggle = (System.Windows.Controls.Primitives.ToggleButton)playlistWindow.FindName("LoopToggle");
+        var entries = playlistList.Items.Cast<PlaylistEntryPresentation>().ToArray();
+        Ensure(playlistWindow.Width == 680 && playlistWindow.Height == 540, "Playlist window initial size changed.");
+        Ensure(playlistWindow.MinWidth == 560 && playlistWindow.MinHeight == 400, "Playlist window minimum size changed.");
+        Ensure(entries.Length == 3, "Persisted playlist entries were not displayed.");
+        Ensure(entries.Select(entry => entry.Order).SequenceEqual([1, 2, 3]), "Playlist order was not displayed.");
+        Ensure(entries[0].Path == entries[2].Path, "Duplicate playlist entries were not preserved.");
+        Ensure(!entries[0].IsMissing && entries[1].IsMissing && !entries[2].IsMissing, "Missing playlist state was incorrect.");
+        Ensure(loopToggle.IsChecked == true, "Persisted loop-on state was not restored.");
+        Ensure(Equals(loopToggle.Content, "↻  ループ ON"), "Restored loop label was incorrect.");
+
+        loopToggle.IsChecked = false;
+        await WaitUntilAsync(
+            () => !repository.GetSnapshot().Loop && loopToggle.IsEnabled,
+            TimeSpan.FromSeconds(5),
+            "Loop-off state was not saved.");
+
+        playlistWindow.Close();
+        await WaitUntilAsync(
+            () => Application.Current.Windows.OfType<PlaylistWindow>().Count() == 0 && !playlistMenu.IsChecked,
+            TimeSpan.FromSeconds(5),
+            "Closing the playlist window did not update the View menu.");
+        playlistMenu.IsChecked = true;
+        await WaitUntilAsync(
+            () => Application.Current.Windows.OfType<PlaylistWindow>().Count() == 1,
+            TimeSpan.FromSeconds(5),
+            "Playlist window could not be reopened.");
+        var reopenedWindow = Application.Current.Windows.OfType<PlaylistWindow>().Single();
+        var reopenedLoopToggle =
+            (System.Windows.Controls.Primitives.ToggleButton)reopenedWindow.FindName("LoopToggle");
+        Ensure(reopenedLoopToggle.IsChecked == false, "Reopened playlist window did not reflect loop off.");
+
+        return new PlaylistValidation(
+            EntryCount: entries.Length,
+            DuplicateEntriesPreserved: true,
+            MissingEntriesMarked: true,
+            InitialLoopRestored: true,
+            LoopOffPersisted: true,
+            SingleWindowReopened: true,
+            InitialWidth: playlistWindow.Width,
+            InitialHeight: playlistWindow.Height,
+            MinimumWidth: playlistWindow.MinWidth,
+            MinimumHeight: playlistWindow.MinHeight);
     }
 
     private static async Task<RecentFileValidation> ValidateRecentFilesAsync(
@@ -1757,8 +1866,20 @@ internal static class Program
         resources["TextBrush"] = new SolidColorBrush(Color.FromRgb(0xF2, 0xF6, 0xFC));
         resources["MutedTextBrush"] = new SolidColorBrush(Color.FromRgb(0x9D, 0xAB, 0xC0));
         resources["PanelBrush"] = new SolidColorBrush(Color.FromRgb(0x15, 0x1D, 0x29));
+        resources["PanelRaisedBrush"] = new SolidColorBrush(Color.FromRgb(0x1C, 0x26, 0x34));
         resources["BorderBrush"] = new SolidColorBrush(Color.FromRgb(0x34, 0x41, 0x56));
         resources["PrimaryBrush"] = new SolidColorBrush(Color.FromRgb(0x47, 0xB8, 0xFF));
+        resources["PrimaryHoverBrush"] = new SolidColorBrush(Color.FromRgb(0x70, 0xC8, 0xFF));
+        var playlistButtonStyle = new Style(typeof(Button));
+        playlistButtonStyle.Setters.Add(new Setter(Control.ForegroundProperty, resources["TextBrush"]));
+        playlistButtonStyle.Setters.Add(new Setter(Control.BackgroundProperty, resources["PanelRaisedBrush"]));
+        playlistButtonStyle.Setters.Add(new Setter(Control.BorderBrushProperty, resources["BorderBrush"]));
+        playlistButtonStyle.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(14, 8, 14, 8)));
+        resources["PlaylistButtonStyle"] = playlistButtonStyle;
+        var playlistPrimaryButtonStyle = new Style(typeof(Button), playlistButtonStyle);
+        playlistPrimaryButtonStyle.Setters.Add(new Setter(Control.BackgroundProperty, resources["PrimaryBrush"]));
+        playlistPrimaryButtonStyle.Setters.Add(new Setter(Control.BorderBrushProperty, resources["PrimaryBrush"]));
+        resources["PlaylistPrimaryButtonStyle"] = playlistPrimaryButtonStyle;
     }
 
     private sealed class RecordingDiagnosticLog : IDiagnosticLog
@@ -1826,6 +1947,18 @@ internal static class Program
         bool BulkMissingRemovalPersisted,
         bool ClearHistoryPersisted,
         bool ForegroundInherited);
+
+    private readonly record struct PlaylistValidation(
+        int EntryCount,
+        bool DuplicateEntriesPreserved,
+        bool MissingEntriesMarked,
+        bool InitialLoopRestored,
+        bool LoopOffPersisted,
+        bool SingleWindowReopened,
+        double InitialWidth,
+        double InitialHeight,
+        double MinimumWidth,
+        double MinimumHeight);
 
     private sealed class RecordingNotificationSink : IUserNotificationSink
     {

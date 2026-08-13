@@ -42,6 +42,8 @@ public partial class MainWindow : Window
     private IPlaybackBackend? _playbackBackend;
     private VideoProfileRepository? _videoProfiles;
     private RecentFileRepository? _recentFiles;
+    private PlaylistRepository? _playlist;
+    private PlaylistWindow? _playlistWindow;
     private CancellationTokenSource? _openCancellation;
     private Task? _openTask;
     private bool _isOpeningVideo;
@@ -53,6 +55,7 @@ public partial class MainWindow : Window
     private long _savedVideoProfileRevision;
     private Task<JsonSaveResult>? _videoProfileSaveTask;
     private Task? _recentFileMutationTask;
+    private Task? _playlistMutationTask;
     private DateTime _seekPresentationHoldUntilUtc;
     private bool _closeRequested;
     private bool _allowClose;
@@ -100,13 +103,15 @@ public partial class MainWindow : Window
         ErrorReporter errorReporter,
         IPlaybackBackend? playbackBackend,
         VideoProfileRepository? videoProfiles = null,
-        RecentFileRepository? recentFiles = null)
+        RecentFileRepository? recentFiles = null,
+        PlaylistRepository? playlist = null)
     {
         _paths = paths;
         _errorReporter = errorReporter;
         _playbackBackend = playbackBackend;
         _videoProfiles = videoProfiles;
         _recentFiles = recentFiles;
+        _playlist = playlist;
         OpenVideoMenuItem.IsEnabled = playbackBackend is not null;
         RebuildRecentFilesMenu();
 
@@ -235,6 +240,104 @@ public partial class MainWindow : Window
                 await RunRecentFileMutationAsync(repository => repository.ClearAsync());
                 break;
         }
+    }
+
+    private void PlaylistMenuItem_OnCheckedChanged(object sender, RoutedEventArgs eventArgs)
+    {
+        if (PlaylistMenuItem.IsChecked)
+        {
+            ShowPlaylistWindow();
+            return;
+        }
+
+        _playlistWindow?.Close();
+    }
+
+    private void ShowPlaylistWindow()
+    {
+        if (_playlistWindow is not null)
+        {
+            _playlistWindow.Activate();
+            return;
+        }
+
+        var snapshot = _playlist?.GetSnapshot() ?? new PlaylistSnapshot([], false);
+        var playlistWindow = new PlaylistWindow(
+            snapshot.Entries,
+            snapshot.Loop,
+            canPersistLoop: _playlist is not null)
+        {
+            Owner = this,
+        };
+        playlistWindow.LoopChanged += PlaylistWindow_OnLoopChanged;
+        playlistWindow.Closed += PlaylistWindow_OnClosed;
+        _playlistWindow = playlistWindow;
+        playlistWindow.Show();
+    }
+
+    private async void PlaylistWindow_OnLoopChanged(
+        object? sender,
+        PlaylistLoopChangedEventArgs eventArgs)
+    {
+        var playlist = _playlist;
+        var playlistWindow = sender as PlaylistWindow;
+        if (playlist is null || _playlistMutationTask is not null || _closeRequested)
+        {
+            playlistWindow?.CompleteLoopSave();
+            return;
+        }
+
+        Task<JsonSaveResult> mutationTask;
+        try
+        {
+            mutationTask = playlist.SetLoopAsync(eventArgs.Loop);
+        }
+        catch (Exception exception)
+        {
+            ReportPlaylistSaveFailure(exception, playlist.FilePath);
+            playlistWindow?.CompleteLoopSave();
+            return;
+        }
+
+        _playlistMutationTask = mutationTask;
+        try
+        {
+            var result = await mutationTask;
+            if (!result.Success)
+            {
+                ReportPlaylistSaveFailure(
+                    result.Exception ?? new IOException(result.ErrorMessage),
+                    playlist.FilePath);
+            }
+        }
+        catch (Exception exception)
+        {
+            ReportPlaylistSaveFailure(exception, playlist.FilePath);
+        }
+        finally
+        {
+            if (ReferenceEquals(_playlistMutationTask, mutationTask))
+            {
+                _playlistMutationTask = null;
+            }
+
+            if (!_closeRequested)
+            {
+                playlistWindow?.CompleteLoopSave();
+            }
+        }
+    }
+
+    private void PlaylistWindow_OnClosed(object? sender, EventArgs eventArgs)
+    {
+        if (sender is PlaylistWindow playlistWindow)
+        {
+            playlistWindow.LoopChanged -= PlaylistWindow_OnLoopChanged;
+            playlistWindow.Closed -= PlaylistWindow_OnClosed;
+        }
+
+        _playlistWindow = null;
+        PlaylistMenuItem.IsChecked = false;
     }
 
     private async Task OpenVideoFromUserRequestAsync(string path)
@@ -496,10 +599,15 @@ public partial class MainWindow : Window
                 MuteButton.IsEnabled = false;
                 PlaybackRateMenuItem.IsEnabled = false;
                 RecentFilesMenuItem.IsEnabled = false;
+                PlaylistMenuItem.IsEnabled = false;
+                _playlistWindow?.DisablePersistenceControls();
                 VideoContextMenu.IsOpen = false;
                 _openCancellation?.Cancel();
                 _videoProfileSaveTimer.Stop();
-                _ = CloseAfterPendingWorkCompletesAsync(_openTask, _recentFileMutationTask);
+                _ = CloseAfterPendingWorkCompletesAsync(
+                    _openTask,
+                    _recentFileMutationTask,
+                    _playlistMutationTask);
             }
 
             return;
@@ -511,6 +619,13 @@ public partial class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         _disposed = true;
+        if (_playlistWindow is not null)
+        {
+            _playlistWindow.LoopChanged -= PlaylistWindow_OnLoopChanged;
+            _playlistWindow.Closed -= PlaylistWindow_OnClosed;
+            _playlistWindow.Close();
+            _playlistWindow = null;
+        }
         _playbackTimelineTimer.Stop();
         _playbackTimelineTimer.Tick -= PlaybackTimelineTimer_OnTick;
         _videoProfileSaveTimer.Stop();
@@ -538,6 +653,8 @@ public partial class MainWindow : Window
         _videoProfiles = null;
         _recentFiles?.Dispose();
         _recentFiles = null;
+        _playlist?.Dispose();
+        _playlist = null;
         base.OnClosed(e);
     }
 
@@ -712,32 +829,28 @@ public partial class MainWindow : Window
             exception,
             targetPath);
 
+    private void ReportPlaylistSaveFailure(Exception exception, string targetPath) =>
+        _errorReporter?.Report(
+            new UserNotification(
+                UserNotificationSeverity.Warning,
+                "プレイリストを保存できません。",
+                "内容は現在の実行中だけ保持されます。アプリの配置先に書き込み権限があるか確認してください。"),
+            "playlist-save-failed",
+            exception.Message,
+            exception,
+            targetPath);
+
     private async Task CloseAfterPendingWorkCompletesAsync(
         Task? openTask,
-        Task? recentFileMutationTask)
+        Task? recentFileMutationTask,
+        Task? playlistMutationTask)
     {
         // OnClosing must return before Close is requested again when there is no pending work.
         await Dispatcher.Yield(DispatcherPriority.Background);
 
-        try
-        {
-            if (openTask is not null)
-            {
-                await openTask;
-            }
-
-            if (recentFileMutationTask is not null)
-            {
-                await recentFileMutationTask;
-            }
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception)
-        {
-            // OpenVideoAsync reports the original failure before the window closes.
-        }
+        await IgnoreReportedPendingFailureAsync(openTask);
+        await IgnoreReportedPendingFailureAsync(recentFileMutationTask);
+        await IgnoreReportedPendingFailureAsync(playlistMutationTask);
 
         try
         {
@@ -751,6 +864,26 @@ public partial class MainWindow : Window
 
         _allowClose = true;
         Close();
+    }
+
+    private static async Task IgnoreReportedPendingFailureAsync(Task? task)
+    {
+        if (task is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await task;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception)
+        {
+            // The operation owner reports the original failure before normal shutdown continues.
+        }
     }
 
     private sealed record OpenRecentFileAction(string Path);

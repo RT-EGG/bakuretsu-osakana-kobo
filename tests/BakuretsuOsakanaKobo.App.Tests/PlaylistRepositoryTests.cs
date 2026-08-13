@@ -72,6 +72,72 @@ public sealed class PlaylistRepositoryTests
     }
 
     [Fact]
+    public async Task RemoveAtIndicesAsync_RemovesOnlySelectedRegistrationsAndLeavesSourceFiles()
+    {
+        using var directory = new TestDirectory();
+        var first = Path.Combine(directory.Path, "first.mp4");
+        var second = Path.Combine(directory.Path, "second.wmv");
+        await File.WriteAllTextAsync(first, "first");
+        await File.WriteAllTextAsync(second, "second");
+        using var repository = CreateRepository(directory.Path);
+        await repository.LoadAsync();
+        Assert.True((await repository.ReplaceEntriesAsync([first, second, first, second])).Success);
+
+        Assert.True((await repository.RemoveAtIndicesAsync([2, 1, 1])).Success);
+
+        Assert.Equal([Path.GetFullPath(first), Path.GetFullPath(second)], repository.GetSnapshot().Entries);
+        Assert.True(File.Exists(first));
+        Assert.True(File.Exists(second));
+        using var reloaded = CreateRepository(directory.Path);
+        Assert.False((await reloaded.LoadAsync()).UsedDefault);
+        Assert.Equal(repository.GetSnapshot().Entries, reloaded.GetSnapshot().Entries);
+    }
+
+    [Fact]
+    public async Task MoveToInsertionIndexAsync_MovesBeforeAndAfterUsingPreMoveInsertionIndex()
+    {
+        using var directory = new TestDirectory();
+        var entries = new[]
+        {
+            Path.Combine(directory.Path, "a.mp4"),
+            Path.Combine(directory.Path, "b.mp4"),
+            Path.Combine(directory.Path, "c.mp4"),
+            Path.Combine(directory.Path, "d.mp4"),
+        };
+        using var repository = CreateRepository(directory.Path);
+        await repository.LoadAsync();
+        Assert.True((await repository.ReplaceEntriesAsync(entries)).Success);
+
+        Assert.True((await repository.MoveToInsertionIndexAsync(0, 4)).Success);
+        Assert.Equal(
+            entries.Select(Path.GetFullPath).Skip(1).Append(Path.GetFullPath(entries[0])),
+            repository.GetSnapshot().Entries);
+
+        Assert.True((await repository.MoveToInsertionIndexAsync(3, 0)).Success);
+        Assert.Equal(entries.Select(Path.GetFullPath), repository.GetSnapshot().Entries);
+        using var reloaded = CreateRepository(directory.Path);
+        Assert.False((await reloaded.LoadAsync()).UsedDefault);
+        Assert.Equal(entries.Select(Path.GetFullPath), reloaded.GetSnapshot().Entries);
+    }
+
+    [Fact]
+    public async Task IndexedMutations_RejectInvalidIndicesBeforeChangingPlaylist()
+    {
+        using var directory = new TestDirectory();
+        var entry = Path.Combine(directory.Path, "entry.mp4");
+        using var repository = CreateRepository(directory.Path);
+        await repository.LoadAsync();
+        Assert.True((await repository.AddEntriesAsync([entry])).Success);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            repository.RemoveAtIndicesAsync([0, 2]));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            repository.MoveToInsertionIndexAsync(0, 2));
+
+        Assert.Equal([Path.GetFullPath(entry)], repository.GetSnapshot().Entries);
+    }
+
+    [Fact]
     public async Task LoadAsync_BacksUpInvalidRelativePathAndUsesDefault()
     {
         using var directory = new TestDirectory();

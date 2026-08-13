@@ -15,6 +15,7 @@ public sealed class PlaylistPresentationTests
             paths,
             path => string.Equals(path, first, StringComparison.OrdinalIgnoreCase));
 
+        Assert.Equal([0, 1, 2], entries.Select(entry => entry.Index));
         Assert.Equal([1, 2, 3], entries.Select(entry => entry.Order));
         Assert.Equal(paths, entries.Select(entry => entry.Path));
         Assert.Equal(["first.mp4", "missing.wmv", "first.mp4"], entries.Select(entry => entry.FileName));

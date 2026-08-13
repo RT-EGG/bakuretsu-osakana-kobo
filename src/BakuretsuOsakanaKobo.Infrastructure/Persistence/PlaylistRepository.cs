@@ -77,6 +77,59 @@ public sealed class PlaylistRepository : IDisposable
             cancellationToken);
     }
 
+    public Task<JsonSaveResult> RemoveAtIndicesAsync(
+        IEnumerable<int> indices,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(indices);
+        var distinctIndices = indices.Distinct().OrderDescending().ToArray();
+        if (distinctIndices.Length == 0)
+        {
+            throw new ArgumentException("At least one playlist index is required.", nameof(indices));
+        }
+
+        return MutateAndSaveAsync(
+            () =>
+            {
+                if (distinctIndices.Any(index => index < 0 || index >= _entries.Count))
+                {
+                    throw new ArgumentOutOfRangeException(nameof(indices));
+                }
+
+                foreach (var index in distinctIndices)
+                {
+                    _entries.RemoveAt(index);
+                }
+            },
+            cancellationToken);
+    }
+
+    public Task<JsonSaveResult> MoveToInsertionIndexAsync(
+        int sourceIndex,
+        int insertionIndex,
+        CancellationToken cancellationToken = default) =>
+        MutateAndSaveAsync(
+            () =>
+            {
+                if (sourceIndex < 0 || sourceIndex >= _entries.Count)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(sourceIndex));
+                }
+
+                if (insertionIndex < 0 || insertionIndex > _entries.Count)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(insertionIndex));
+                }
+
+                var entry = _entries[sourceIndex];
+                _entries.RemoveAt(sourceIndex);
+                var adjustedInsertionIndex = sourceIndex < insertionIndex
+                    ? insertionIndex - 1
+                    : insertionIndex;
+                _entries.Insert(adjustedInsertionIndex, entry);
+            },
+            cancellationToken);
+
     public Task<JsonSaveResult> SetLoopAsync(
         bool loop,
         CancellationToken cancellationToken = default) =>

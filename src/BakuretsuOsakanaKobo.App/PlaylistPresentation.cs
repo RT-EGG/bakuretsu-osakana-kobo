@@ -2,7 +2,12 @@ using System.IO;
 
 namespace BakuretsuOsakanaKobo;
 
-internal sealed record PlaylistEntryPresentation(int Order, string Path, string FileName, bool IsMissing);
+internal sealed record PlaylistEntryPresentation(
+    int Index,
+    int Order,
+    string Path,
+    string FileName,
+    bool IsMissing);
 
 internal static class PlaylistPresentation
 {
@@ -17,6 +22,7 @@ internal static class PlaylistPresentation
         ArgumentNullException.ThrowIfNull(fileExists);
         return entries
             .Select((path, index) => new PlaylistEntryPresentation(
+                index,
                 index + 1,
                 path,
                 Path.GetFileName(path),

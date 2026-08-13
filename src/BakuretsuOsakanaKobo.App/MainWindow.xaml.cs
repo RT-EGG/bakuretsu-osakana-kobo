@@ -272,6 +272,8 @@ public partial class MainWindow : Window
         };
         playlistWindow.LoopChanged += PlaylistWindow_OnLoopChanged;
         playlistWindow.EntriesAddRequested += PlaylistWindow_OnEntriesAddRequested;
+        playlistWindow.EntriesRemoveRequested += PlaylistWindow_OnEntriesRemoveRequested;
+        playlistWindow.EntryMoveRequested += PlaylistWindow_OnEntryMoveRequested;
         playlistWindow.Closed += PlaylistWindow_OnClosed;
         _playlistWindow = playlistWindow;
         playlistWindow.Show();
@@ -416,12 +418,107 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void PlaylistWindow_OnEntriesRemoveRequested(
+        object? sender,
+        PlaylistEntriesRemoveRequestedEventArgs eventArgs)
+    {
+        await PersistPlaylistMutationAsync(
+            sender as PlaylistWindow,
+            playlist => playlist.RemoveAtIndicesAsync(eventArgs.Indices),
+            $"{eventArgs.Indices.Count}件をプレイリストから削除しました。元の動画ファイルは削除していません。");
+    }
+
+    private async void PlaylistWindow_OnEntryMoveRequested(
+        object? sender,
+        PlaylistEntryMoveRequestedEventArgs eventArgs)
+    {
+        await PersistPlaylistMutationAsync(
+            sender as PlaylistWindow,
+            playlist => playlist.MoveToInsertionIndexAsync(
+                eventArgs.SourceIndex,
+                eventArgs.InsertionIndex),
+            "再生順を変更しました。");
+    }
+
+    private async Task PersistPlaylistMutationAsync(
+        PlaylistWindow? playlistWindow,
+        Func<PlaylistRepository, Task<JsonSaveResult>> mutation,
+        string notification)
+    {
+        var playlist = _playlist;
+        if (playlist is null || _closeRequested)
+        {
+            playlistWindow?.CompletePersistence(playlist?.GetSnapshot().Entries ?? []);
+            return;
+        }
+
+        if (_playlistMutationTask is not null)
+        {
+            return;
+        }
+
+        Task<JsonSaveResult> mutationTask;
+        try
+        {
+            mutationTask = mutation(playlist);
+        }
+        catch (Exception exception)
+        {
+            ReportPlaylistSaveFailure(exception, playlist.FilePath);
+            playlistWindow?.CompletePersistence(
+                playlist.GetSnapshot().Entries,
+                enablePersistence: true);
+            return;
+        }
+
+        _playlistMutationTask = mutationTask;
+        var saved = false;
+        try
+        {
+            var result = await mutationTask;
+            saved = result.Success;
+            if (!result.Success)
+            {
+                ReportPlaylistSaveFailure(
+                    result.Exception ?? new IOException(result.ErrorMessage),
+                    playlist.FilePath);
+            }
+        }
+        catch (Exception exception)
+        {
+            ReportPlaylistSaveFailure(exception, playlist.FilePath);
+        }
+        finally
+        {
+            if (ReferenceEquals(_playlistMutationTask, mutationTask))
+            {
+                _playlistMutationTask = null;
+            }
+
+            if (!_closeRequested)
+            {
+                var entries = playlist.GetSnapshot().Entries;
+                playlistWindow?.CompletePersistence(
+                    entries,
+                    enablePersistence: true,
+                    notification: saved ? notification : null);
+                if (_playlistWindow is { } activeWindow &&
+                    !ReferenceEquals(activeWindow, playlistWindow))
+                {
+                    activeWindow.CompletePersistence(entries, enablePersistence: true);
+                }
+            }
+        }
+    }
+
     private void PlaylistWindow_OnClosed(object? sender, EventArgs eventArgs)
     {
         if (sender is PlaylistWindow playlistWindow)
         {
             playlistWindow.LoopChanged -= PlaylistWindow_OnLoopChanged;
             playlistWindow.EntriesAddRequested -= PlaylistWindow_OnEntriesAddRequested;
+            playlistWindow.EntriesRemoveRequested -= PlaylistWindow_OnEntriesRemoveRequested;
+            playlistWindow.EntryMoveRequested -= PlaylistWindow_OnEntryMoveRequested;
             playlistWindow.Closed -= PlaylistWindow_OnClosed;
         }
 
@@ -713,6 +810,8 @@ public partial class MainWindow : Window
         {
             _playlistWindow.LoopChanged -= PlaylistWindow_OnLoopChanged;
             _playlistWindow.EntriesAddRequested -= PlaylistWindow_OnEntriesAddRequested;
+            _playlistWindow.EntriesRemoveRequested -= PlaylistWindow_OnEntriesRemoveRequested;
+            _playlistWindow.EntryMoveRequested -= PlaylistWindow_OnEntryMoveRequested;
             _playlistWindow.Closed -= PlaylistWindow_OnClosed;
             _playlistWindow.Close();
             _playlistWindow = null;

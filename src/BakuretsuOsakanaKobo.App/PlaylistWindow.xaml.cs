@@ -1,5 +1,10 @@
-using System.Windows;
+using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Documents;
+using System.Windows.Input;
+using System.Windows.Media;
 using Microsoft.Win32;
 
 namespace BakuretsuOsakanaKobo;
@@ -18,12 +23,29 @@ internal sealed class PlaylistEntriesAddRequestedEventArgs(
     public int RejectedCount { get; } = rejectedCount;
 }
 
+internal sealed class PlaylistEntriesRemoveRequestedEventArgs(IReadOnlyList<int> indices) : EventArgs
+{
+    public IReadOnlyList<int> Indices { get; } = indices;
+}
+
+internal sealed class PlaylistEntryMoveRequestedEventArgs(int sourceIndex, int insertionIndex) : EventArgs
+{
+    public int SourceIndex { get; } = sourceIndex;
+
+    public int InsertionIndex { get; } = insertionIndex;
+}
+
 public partial class PlaylistWindow : Window
 {
     private bool _isInitializing;
     private bool _canPersist;
     private bool _isPersistenceBusy;
     private string? _currentMediaPath;
+    private Point _dragStartPoint;
+    private PlaylistEntryPresentation? _draggedEntry;
+    private AdornerLayer? _dragAdornerLayer;
+    private PlaylistDragAdorner? _dragAdorner;
+    private int _dragInsertionIndex;
 
     public PlaylistWindow(
         IReadOnlyList<string> entries,
@@ -46,6 +68,10 @@ public partial class PlaylistWindow : Window
 
     internal event EventHandler<PlaylistEntriesAddRequestedEventArgs>? EntriesAddRequested;
 
+    internal event EventHandler<PlaylistEntriesRemoveRequestedEventArgs>? EntriesRemoveRequested;
+
+    internal event EventHandler<PlaylistEntryMoveRequestedEventArgs>? EntryMoveRequested;
+
     internal void UpdateCurrentMedia(string? path)
     {
         _currentMediaPath = path;
@@ -56,7 +82,8 @@ public partial class PlaylistWindow : Window
         IReadOnlyList<string> entries,
         int addedCount = 0,
         int rejectedCount = 0,
-        bool enablePersistence = false)
+        bool enablePersistence = false,
+        string? notification = null)
     {
         if (enablePersistence)
         {
@@ -76,6 +103,10 @@ public partial class PlaylistWindow : Window
             ShowNotification(rejectedCount > 0
                 ? $"{addedCount}件を追加しました。MP4またはWMVではない{rejectedCount}件は追加しませんでした。"
                 : $"{addedCount}件をプレイリストへ追加しました。");
+        }
+        else if (notification is not null)
+        {
+            ShowNotification(notification);
         }
     }
 
@@ -123,6 +154,11 @@ public partial class PlaylistWindow : Window
 
     private void Window_OnPreviewDragOver(object sender, DragEventArgs eventArgs)
     {
+        if (eventArgs.Data.GetDataPresent(typeof(PlaylistEntryPresentation)))
+        {
+            return;
+        }
+
         var request = GetDropRequest(eventArgs.Data);
         eventArgs.Effects = !_isPersistenceBusy && _canPersist && request.Paths.Count > 0
             ? DragDropEffects.Copy
@@ -132,6 +168,11 @@ public partial class PlaylistWindow : Window
 
     private void Window_OnPreviewDrop(object sender, DragEventArgs eventArgs)
     {
+        if (eventArgs.Data.GetDataPresent(typeof(PlaylistEntryPresentation)))
+        {
+            return;
+        }
+
         var request = GetDropRequest(eventArgs.Data);
         if (!_isPersistenceBusy && _canPersist)
         {
@@ -193,7 +234,9 @@ public partial class PlaylistWindow : Window
         LoopToggle.IsEnabled = canMutate;
         AddFilesButton.IsEnabled = canMutate;
         AddCurrentButton.IsEnabled = canMutate && _currentMediaPath is not null;
+        RemoveSelectedButton.IsEnabled = canMutate && PlaylistList.SelectedItems.Count > 0;
         AllowDrop = canMutate;
+        PlaylistList.AllowDrop = canMutate;
     }
 
     private void UpdateEntries(IReadOnlyList<string> entries)
@@ -208,5 +251,215 @@ public partial class PlaylistWindow : Window
     {
         NotificationText.Text = message;
         NotificationBar.Visibility = Visibility.Visible;
+    }
+
+    private void RemoveSelectedButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        if (_isPersistenceBusy || !_canPersist)
+        {
+            return;
+        }
+
+        var indices = PlaylistList.SelectedItems
+            .Cast<PlaylistEntryPresentation>()
+            .Select(entry => entry.Index)
+            .Order()
+            .ToArray();
+        if (indices.Length == 0)
+        {
+            return;
+        }
+
+        BeginPersistence();
+        EntriesRemoveRequested?.Invoke(this, new PlaylistEntriesRemoveRequestedEventArgs(indices));
+    }
+
+    private void PlaylistList_OnSelectionChanged(object sender, SelectionChangedEventArgs eventArgs) =>
+        UpdatePersistenceControls();
+
+    private void PlaylistList_OnPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs eventArgs)
+    {
+        _dragStartPoint = eventArgs.GetPosition(PlaylistList);
+        _draggedEntry = ItemsControl.ContainerFromElement(
+                PlaylistList,
+                eventArgs.OriginalSource as DependencyObject)
+            is ListBoxItem item
+            ? item.DataContext as PlaylistEntryPresentation
+            : null;
+    }
+
+    private void PlaylistList_OnMouseMove(object sender, MouseEventArgs eventArgs)
+    {
+        if (_isPersistenceBusy || !_canPersist ||
+            eventArgs.LeftButton != MouseButtonState.Pressed || _draggedEntry is null)
+        {
+            return;
+        }
+
+        var point = eventArgs.GetPosition(PlaylistList);
+        if (Math.Abs(point.X - _dragStartPoint.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(point.Y - _dragStartPoint.Y) < SystemParameters.MinimumVerticalDragDistance)
+        {
+            return;
+        }
+
+        var draggedEntry = _draggedEntry;
+        _draggedEntry = null;
+        ShowDragAdorner(draggedEntry, point);
+        try
+        {
+            DragDrop.DoDragDrop(PlaylistList, draggedEntry, DragDropEffects.Move);
+        }
+        finally
+        {
+            HideDragAdorner();
+        }
+    }
+
+    private void PlaylistList_OnDragOver(object sender, DragEventArgs eventArgs)
+    {
+        if (!_isPersistenceBusy && _canPersist &&
+            eventArgs.Data.GetDataPresent(typeof(PlaylistEntryPresentation)))
+        {
+            UpdateDragInsertion(
+                eventArgs.GetPosition(PlaylistList),
+                eventArgs.OriginalSource as DependencyObject);
+            eventArgs.Effects = DragDropEffects.Move;
+            eventArgs.Handled = true;
+        }
+    }
+
+    private void PlaylistList_OnDrop(object sender, DragEventArgs eventArgs)
+    {
+        if (_isPersistenceBusy || !_canPersist ||
+            eventArgs.Data.GetData(typeof(PlaylistEntryPresentation)) is not PlaylistEntryPresentation draggedEntry)
+        {
+            return;
+        }
+
+        UpdateDragInsertion(
+            eventArgs.GetPosition(PlaylistList),
+            eventArgs.OriginalSource as DependencyObject);
+        BeginPersistence();
+        EntryMoveRequested?.Invoke(
+            this,
+            new PlaylistEntryMoveRequestedEventArgs(draggedEntry.Index, _dragInsertionIndex));
+        eventArgs.Handled = true;
+    }
+
+    private void ShowDragAdorner(PlaylistEntryPresentation entry, Point pointer)
+    {
+        _dragAdornerLayer = AdornerLayer.GetAdornerLayer(PlaylistList);
+        if (_dragAdornerLayer is null)
+        {
+            return;
+        }
+
+        _dragInsertionIndex = entry.Index;
+        _dragAdorner = new PlaylistDragAdorner(PlaylistList, entry.FileName)
+        {
+            IsHitTestVisible = false,
+        };
+        _dragAdornerLayer.Add(_dragAdorner);
+        UpdateDragInsertion(pointer, null);
+    }
+
+    private void HideDragAdorner()
+    {
+        if (_dragAdorner is not null)
+        {
+            _dragAdornerLayer?.Remove(_dragAdorner);
+        }
+
+        _dragAdorner = null;
+        _dragAdornerLayer = null;
+    }
+
+    private void UpdateDragInsertion(Point pointer, DependencyObject? originalSource)
+    {
+        var item = originalSource is null
+            ? null
+            : ItemsControl.ContainerFromElement(PlaylistList, originalSource) as ListBoxItem;
+        double insertionY;
+        if (item is not null)
+        {
+            var itemIndex = PlaylistList.ItemContainerGenerator.IndexFromContainer(item);
+            var middle = item.TranslatePoint(new Point(0, item.ActualHeight / 2), PlaylistList).Y;
+            var insertAfter = pointer.Y >= middle;
+            _dragInsertionIndex = itemIndex + (insertAfter ? 1 : 0);
+            insertionY = item.TranslatePoint(
+                new Point(0, insertAfter ? item.ActualHeight : 0),
+                PlaylistList).Y;
+        }
+        else
+        {
+            _dragInsertionIndex = PlaylistList.Items.Count;
+            insertionY = PlaylistList.ActualHeight - 2;
+        }
+
+        _dragAdorner?.Update(pointer, insertionY);
+    }
+
+    protected override void OnClosed(EventArgs eventArgs)
+    {
+        HideDragAdorner();
+        base.OnClosed(eventArgs);
+    }
+
+    private sealed class PlaylistDragAdorner(FrameworkElement adornedElement, string fileName)
+        : Adorner(adornedElement)
+    {
+        private readonly Typeface _typeface = new("Segoe UI");
+        private Point _pointer;
+        private double _insertionY;
+
+        public void Update(Point pointer, double insertionY)
+        {
+            _pointer = pointer;
+            _insertionY = insertionY;
+            InvalidateVisual();
+        }
+
+        protected override void OnRender(DrawingContext drawingContext)
+        {
+            var primaryBrush = new SolidColorBrush(Color.FromRgb(71, 184, 255));
+            var insertionPen = new Pen(primaryBrush, 3);
+            drawingContext.DrawLine(
+                insertionPen,
+                new Point(4, _insertionY),
+                new Point(AdornedElement.RenderSize.Width - 4, _insertionY));
+
+            var text = new FormattedText(
+                fileName,
+                CultureInfo.CurrentUICulture,
+                FlowDirection.LeftToRight,
+                _typeface,
+                13,
+                Brushes.White,
+                VisualTreeHelper.GetDpi(this).PixelsPerDip)
+            {
+                MaxTextWidth = 230,
+                Trimming = TextTrimming.CharacterEllipsis,
+            };
+            var width = Math.Min(260, Math.Max(150, text.Width + 28));
+            const double height = 42;
+            var x = Math.Clamp(
+                _pointer.X + 14,
+                4,
+                Math.Max(4, AdornedElement.RenderSize.Width - width - 4));
+            var y = Math.Clamp(
+                _pointer.Y + 14,
+                4,
+                Math.Max(4, AdornedElement.RenderSize.Height - height - 4));
+            drawingContext.PushOpacity(0.86);
+            drawingContext.DrawRoundedRectangle(
+                new SolidColorBrush(Color.FromRgb(28, 38, 52)),
+                new Pen(primaryBrush, 1),
+                new Rect(x, y, width, height),
+                6,
+                6);
+            drawingContext.DrawText(text, new Point(x + 14, y + 12));
+            drawingContext.Pop();
+        }
     }
 }

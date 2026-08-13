@@ -406,7 +406,7 @@ internal static class Program
             var loaded = verifier.LoadAsync().GetAwaiter().GetResult();
             Ensure(loaded.Warning is null, loaded.Warning ?? "Final playlist load failed.");
             var snapshot = verifier.GetSnapshot();
-            Ensure(snapshot.Entries.Count == 5, "Final playlist additions were not persisted.");
+            Ensure(snapshot.Entries.Count == 3, "Final playlist removal and reorder were not persisted.");
             Ensure(!snapshot.Loop, "Final playlist loop state was not persisted as off.");
             var report = new
             {
@@ -439,6 +439,7 @@ internal static class Program
         var playlistList = (ListBox)playlistWindow.FindName("PlaylistList");
         var loopToggle = (System.Windows.Controls.Primitives.ToggleButton)playlistWindow.FindName("LoopToggle");
         var addCurrentButton = (Button)playlistWindow.FindName("AddCurrentButton");
+        var removeSelectedButton = (Button)playlistWindow.FindName("RemoveSelectedButton");
         var notificationText = (TextBlock)playlistWindow.FindName("NotificationText");
         var entries = playlistList.Items.Cast<PlaylistEntryPresentation>().ToArray();
         Ensure(playlistWindow.Width == 680 && playlistWindow.Height == 540, "Playlist window initial size changed.");
@@ -483,6 +484,40 @@ internal static class Program
             notificationText.Text.Contains("1件は追加しませんでした", StringComparison.Ordinal),
             "Mixed playlist drop summary was incorrect.");
 
+        var sourceVideoPath = entries[0].Path;
+        var entriesBeforeRemoval = playlistList.Items.Cast<PlaylistEntryPresentation>().ToArray();
+        playlistList.SelectedItems.Add(entriesBeforeRemoval[2]);
+        playlistList.SelectedItems.Add(entriesBeforeRemoval[3]);
+        Ensure(removeSelectedButton.IsEnabled, "Remove-selected was not enabled for multiple selection.");
+        removeSelectedButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, removeSelectedButton));
+        await WaitUntilAsync(
+            () => repository.GetSnapshot().Entries.Count == 3 &&
+                  notificationText.Text.Contains("元の動画ファイルは削除していません", StringComparison.Ordinal),
+            TimeSpan.FromSeconds(5),
+            "Multiple selected playlist registrations were not removed.");
+        Ensure(File.Exists(sourceVideoPath), "Removing a playlist registration deleted the source video.");
+        Ensure(
+            notificationText.Text.Contains("2件をプレイリストから削除", StringComparison.Ordinal) &&
+            notificationText.Text.Contains("元の動画ファイルは削除していません", StringComparison.Ordinal),
+            "Playlist removal notification did not explain source-file preservation.");
+
+        var orderBeforeMove = repository.GetSnapshot().Entries.ToArray();
+        var firstEntry = playlistList.Items.Cast<PlaylistEntryPresentation>().First();
+        var moveOver = RaisePlaylistDragEvent(playlistList, DragDrop.DragOverEvent, firstEntry);
+        Ensure(
+            moveOver.Handled && moveOver.Effects == DragDropEffects.Move,
+            "Playlist reorder did not advertise Move.");
+        var moveDrop = RaisePlaylistDragEvent(playlistList, DragDrop.DropEvent, firstEntry);
+        Ensure(moveDrop.Handled, "Playlist reorder drop was not handled.");
+        var expectedMovedOrder = orderBeforeMove.Skip(1).Append(orderBeforeMove[0]).ToArray();
+        await WaitUntilAsync(
+            () => repository.GetSnapshot().Entries.SequenceEqual(expectedMovedOrder) && addCurrentButton.IsEnabled,
+            TimeSpan.FromSeconds(5),
+            "Playlist item was not moved to the requested insertion index.");
+        Ensure(
+            notificationText.Text.Contains("再生順を変更", StringComparison.Ordinal),
+            "Playlist reorder completion was not announced.");
+
         loopToggle.IsChecked = false;
         await WaitUntilAsync(
             () => !repository.GetSnapshot().Loop && loopToggle.IsEnabled,
@@ -503,11 +538,20 @@ internal static class Program
         var reopenedLoopToggle =
             (System.Windows.Controls.Primitives.ToggleButton)reopenedWindow.FindName("LoopToggle");
         Ensure(reopenedLoopToggle.IsChecked == false, "Reopened playlist window did not reflect loop off.");
+        Ensure(
+            ((ListBox)reopenedWindow.FindName("PlaylistList")).Items
+                .Cast<PlaylistEntryPresentation>()
+                .Select(entry => entry.Path)
+                .SequenceEqual(expectedMovedOrder),
+            "Reopened playlist window did not reflect removed and reordered entries.");
 
         return new PlaylistValidation(
             EntryCount: entries.Length,
             CurrentVideoAdded: true,
             MixedDropAddedSupportedOnly: true,
+            MultipleSelectionRemoved: true,
+            SourceFilesPreserved: true,
+            DragReorderPersisted: true,
             FinalEntryCount: repository.GetSnapshot().Entries.Count,
             DuplicateEntriesPreserved: true,
             MissingEntriesMarked: true,
@@ -956,6 +1000,29 @@ internal static class Program
                 DragDropEffects.Copy,
                 target,
                 new Point(target.ActualWidth / 2, target.ActualHeight / 2),
+            ],
+            culture: null) ?? throw new InvalidOperationException("Could not construct WPF drag event arguments.");
+        eventArgs.RoutedEvent = routedEvent;
+        target.RaiseEvent(eventArgs);
+        return eventArgs;
+    }
+
+    private static DragEventArgs RaisePlaylistDragEvent(
+        FrameworkElement target,
+        RoutedEvent routedEvent,
+        PlaylistEntryPresentation entry)
+    {
+        var data = new DataObject(typeof(PlaylistEntryPresentation), entry);
+        var eventArgs = (DragEventArgs?)Activator.CreateInstance(
+            typeof(DragEventArgs),
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            [
+                data,
+                DragDropKeyStates.LeftMouseButton,
+                DragDropEffects.Move,
+                target,
+                new Point(target.ActualWidth / 2, Math.Max(0, target.ActualHeight - 2)),
             ],
             culture: null) ?? throw new InvalidOperationException("Could not construct WPF drag event arguments.");
         eventArgs.RoutedEvent = routedEvent;
@@ -1990,6 +2057,9 @@ internal static class Program
         int EntryCount,
         bool CurrentVideoAdded,
         bool MixedDropAddedSupportedOnly,
+        bool MultipleSelectionRemoved,
+        bool SourceFilesPreserved,
+        bool DragReorderPersisted,
         int FinalEntryCount,
         bool DuplicateEntriesPreserved,
         bool MissingEntriesMarked,

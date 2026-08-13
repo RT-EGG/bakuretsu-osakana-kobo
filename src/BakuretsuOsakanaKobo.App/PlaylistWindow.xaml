@@ -37,9 +37,11 @@
                           Content="↻  ループ OFF"
                           AutomationProperties.Name="プレイリストをループ" />
             <WrapPanel>
-                <Button MinWidth="78"
+                <Button x:Name="PlayPlaylistButton"
+                        MinWidth="78"
                         Style="{StaticResource PlaylistPrimaryButtonStyle}"
                         IsEnabled="False"
+                        Click="PlayPlaylistButton_OnClick"
                         Content="▶  再生" />
                 <Button x:Name="AddCurrentButton"
                         Margin="8,0,0,0"
@@ -87,6 +89,7 @@
                      BorderThickness="1"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                      SelectionChanged="PlaylistList_OnSelectionChanged"
+                     MouseDoubleClick="PlaylistList_OnMouseDoubleClick"
                      PreviewMouseLeftButtonDown="PlaylistList_OnPreviewMouseLeftButtonDown"
                      MouseMove="PlaylistList_OnMouseMove"
                      DragOver="PlaylistList_OnDragOver"
@@ -123,16 +126,22 @@
                                                Text="{Binding Path}"
                                                TextTrimming="CharacterEllipsis" />
                                 </StackPanel>
-                                <Border x:Name="MissingBadge"
-                                        Grid.Column="2"
-                                        Margin="10,0,0,0"
-                                        Padding="7,3"
-                                        VerticalAlignment="Center"
-                                        Background="#48212A"
-                                        CornerRadius="4"
-                                        Visibility="Collapsed">
-                                    <TextBlock FontSize="11" Foreground="#FFABB4" Text="見つかりません" />
-                                </Border>
+                                <StackPanel Grid.Column="2" Margin="10,0,0,0" VerticalAlignment="Center">
+                                    <Border x:Name="CurrentBadge"
+                                            Padding="7,3"
+                                            Background="#174C69"
+                                            CornerRadius="4"
+                                            Visibility="Collapsed">
+                                        <TextBlock FontSize="11" Foreground="#A9E7FF" Text="再生中" />
+                                    </Border>
+                                    <Border x:Name="MissingBadge"
+                                            Padding="7,3"
+                                            Background="#48212A"
+                                            CornerRadius="4"
+                                            Visibility="Collapsed">
+                                        <TextBlock FontSize="11" Foreground="#FFABB4" Text="{Binding StatusText}" />
+                                    </Border>
+                                </StackPanel>
                             </Grid>
                         </Border>
                         <DataTemplate.Triggers>
@@ -140,6 +149,16 @@
                                 <Setter TargetName="ItemBorder" Property="Opacity" Value="0.68" />
                                 <Setter TargetName="ItemBorder" Property="Background" Value="#24181E" />
                                 <Setter TargetName="MissingBadge" Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding HasLoadError}" Value="True">
+                                <Setter TargetName="ItemBorder" Property="Opacity" Value="0.68" />
+                                <Setter TargetName="ItemBorder" Property="Background" Value="#24181E" />
+                                <Setter TargetName="MissingBadge" Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                                <Setter TargetName="ItemBorder" Property="Background" Value="#12334A" />
+                                <Setter TargetName="ItemBorder" Property="BorderBrush" Value="{StaticResource PrimaryBrush}" />
+                                <Setter TargetName="CurrentBadge" Property="Visibility" Value="Visible" />
                             </DataTrigger>
                         </DataTemplate.Triggers>
                     </DataTemplate>

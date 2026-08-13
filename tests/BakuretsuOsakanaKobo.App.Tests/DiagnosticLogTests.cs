@@ -136,6 +136,25 @@ public sealed class DiagnosticLogTests
     }
 
     [Fact]
+    public void ErrorReporter_ReportDiagnostic_DoesNotShowUserNotification()
+    {
+        var log = new RecordingDiagnosticLog();
+        var sink = new RecordingNotificationSink();
+        var reporter = new ErrorReporter(log, sink);
+
+        reporter.ReportDiagnostic(
+            DiagnosticSeverity.Error,
+            "playlist-entry-skipped",
+            "Candidate could not be opened.",
+            targetPath: @"C:\Videos\broken.mp4");
+
+        Assert.Empty(sink.Notifications);
+        var diagnosticEvent = Assert.Single(log.Events);
+        Assert.Equal("playlist-entry-skipped", diagnosticEvent.EventName);
+        Assert.Equal(@"C:\Videos\broken.mp4", diagnosticEvent.TargetPath);
+    }
+
+    [Fact]
     public void ErrorReporter_WhenNotificationSinkThrows_ContainsFailureAndRecordsIt()
     {
         var log = new RecordingDiagnosticLog();

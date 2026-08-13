@@ -67,6 +67,23 @@ public sealed class ErrorReporter
         }
     }
 
+    public void ReportDiagnostic(
+        DiagnosticSeverity severity,
+        string eventName,
+        string diagnosticMessage,
+        Exception? exception = null,
+        string? targetPath = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(eventName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(diagnosticMessage);
+        TryWriteDiagnostic(new DiagnosticEvent(
+            severity,
+            eventName,
+            diagnosticMessage,
+            exception,
+            targetPath));
+    }
+
     private void TryWriteDiagnostic(DiagnosticEvent diagnosticEvent)
     {
         try

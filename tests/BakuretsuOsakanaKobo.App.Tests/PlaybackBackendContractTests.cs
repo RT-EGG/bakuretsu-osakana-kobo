@@ -148,6 +148,12 @@ public sealed class PlaybackBackendContractTests
 
         public event EventHandler? StateChanged;
 
+        public event EventHandler? PlaybackEnded
+        {
+            add { }
+            remove { }
+        }
+
         public bool IsPlaying { get; private set; }
 
         public bool IsSeekable => false;

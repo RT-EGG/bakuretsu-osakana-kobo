@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -35,17 +36,25 @@ internal sealed class PlaylistEntryMoveRequestedEventArgs(int sourceIndex, int i
     public int InsertionIndex { get; } = insertionIndex;
 }
 
+internal sealed class PlaylistPlayRequestedEventArgs(int startIndex) : EventArgs
+{
+    public int StartIndex { get; } = startIndex;
+}
+
 public partial class PlaylistWindow : Window
 {
     private bool _isInitializing;
     private bool _canPersist;
     private bool _isPersistenceBusy;
+    private bool _isPlaybackRequestBusy;
     private string? _currentMediaPath;
     private Point _dragStartPoint;
     private PlaylistEntryPresentation? _draggedEntry;
     private AdornerLayer? _dragAdornerLayer;
     private PlaylistDragAdorner? _dragAdorner;
     private int _dragInsertionIndex;
+    private int? _currentPlaybackIndex;
+    private IReadOnlySet<int> _loadErrorIndices = new HashSet<int>();
 
     public PlaylistWindow(
         IReadOnlyList<string> entries,
@@ -71,6 +80,8 @@ public partial class PlaylistWindow : Window
     internal event EventHandler<PlaylistEntriesRemoveRequestedEventArgs>? EntriesRemoveRequested;
 
     internal event EventHandler<PlaylistEntryMoveRequestedEventArgs>? EntryMoveRequested;
+
+    internal event EventHandler<PlaylistPlayRequestedEventArgs>? PlayRequested;
 
     internal void UpdateCurrentMedia(string? path)
     {
@@ -113,6 +124,26 @@ public partial class PlaylistWindow : Window
     internal void DisablePersistenceControls()
     {
         _isPersistenceBusy = true;
+        UpdatePersistenceControls();
+    }
+
+    internal void UpdatePlaybackState(int? currentIndex, IReadOnlySet<int> loadErrorIndices)
+    {
+        _currentPlaybackIndex = currentIndex;
+        _loadErrorIndices = new HashSet<int>(loadErrorIndices);
+        if (IsLoaded)
+        {
+            UpdateEntries(PlaylistList.Items.Cast<PlaylistEntryPresentation>()
+                .Select(entry => entry.Path)
+                .ToArray());
+        }
+    }
+
+    internal void ShowPlaybackNotification(string message) => ShowNotification(message);
+
+    internal void SetPlaybackRequestBusy(bool isBusy)
+    {
+        _isPlaybackRequestBusy = isBusy;
         UpdatePersistenceControls();
     }
 
@@ -230,18 +261,25 @@ public partial class PlaylistWindow : Window
 
     private void UpdatePersistenceControls()
     {
-        var canMutate = _canPersist && !_isPersistenceBusy;
+        var canMutate = _canPersist && !_isPersistenceBusy && !_isPlaybackRequestBusy;
         LoopToggle.IsEnabled = canMutate;
         AddFilesButton.IsEnabled = canMutate;
         AddCurrentButton.IsEnabled = canMutate && _currentMediaPath is not null;
         RemoveSelectedButton.IsEnabled = canMutate && PlaylistList.SelectedItems.Count > 0;
         AllowDrop = canMutate;
         PlaylistList.AllowDrop = canMutate;
+        PlayPlaylistButton.IsEnabled = !_isPlaybackRequestBusy && PlaylistList.Items
+            .Cast<PlaylistEntryPresentation>()
+            .Any(entry => !entry.IsMissing);
     }
 
     private void UpdateEntries(IReadOnlyList<string> entries)
     {
-        PlaylistList.ItemsSource = PlaylistPresentation.From(entries);
+        PlaylistList.ItemsSource = PlaylistPresentation.From(
+            entries,
+            File.Exists,
+            _currentPlaybackIndex,
+            _loadErrorIndices);
         EmptyPlaylistPanel.Visibility = entries.Count == 0
             ? Visibility.Visible
             : Visibility.Collapsed;
@@ -272,6 +310,36 @@ public partial class PlaylistWindow : Window
 
         BeginPersistence();
         EntriesRemoveRequested?.Invoke(this, new PlaylistEntriesRemoveRequestedEventArgs(indices));
+    }
+
+    private void PlayPlaylistButton_OnClick(object sender, RoutedEventArgs eventArgs) =>
+        RequestPlayback(startIndex: 0);
+
+    private void PlaylistList_OnMouseDoubleClick(object sender, MouseButtonEventArgs eventArgs)
+    {
+        if (ItemsControl.ContainerFromElement(
+                PlaylistList,
+                eventArgs.OriginalSource as DependencyObject)
+            is not ListBoxItem { DataContext: PlaylistEntryPresentation entry })
+        {
+            return;
+        }
+
+        if (entry.IsMissing)
+        {
+            ShowNotification("この項目は再生できません。ファイルの場所を確認してください。");
+            eventArgs.Handled = true;
+            return;
+        }
+
+        RequestPlayback(entry.Index);
+        eventArgs.Handled = true;
+    }
+
+    private void RequestPlayback(int startIndex)
+    {
+        NotificationBar.Visibility = Visibility.Collapsed;
+        PlayRequested?.Invoke(this, new PlaylistPlayRequestedEventArgs(startIndex));
     }
 
     private void PlaylistList_OnSelectionChanged(object sender, SelectionChangedEventArgs eventArgs) =>

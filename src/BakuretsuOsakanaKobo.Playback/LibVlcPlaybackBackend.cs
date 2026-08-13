@@ -45,6 +45,8 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
 
     public event EventHandler? StateChanged;
 
+    public event EventHandler? PlaybackEnded;
+
     public MediaPlayer MediaPlayer { get; }
 
     public bool IsPlaying
@@ -433,7 +435,7 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         MediaPlayer.Playing += OnStateChanged;
         MediaPlayer.Paused += OnStateChanged;
         MediaPlayer.Stopped += OnStateChanged;
-        MediaPlayer.EndReached += OnStateChanged;
+        MediaPlayer.EndReached += OnPlaybackEnded;
         MediaPlayer.EncounteredError += OnEncounteredError;
     }
 
@@ -442,11 +444,17 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         MediaPlayer.Playing -= OnStateChanged;
         MediaPlayer.Paused -= OnStateChanged;
         MediaPlayer.Stopped -= OnStateChanged;
-        MediaPlayer.EndReached -= OnStateChanged;
+        MediaPlayer.EndReached -= OnPlaybackEnded;
         MediaPlayer.EncounteredError -= OnEncounteredError;
     }
 
     private void OnStateChanged(object? sender, EventArgs eventArgs) => RaiseSafely(StateChanged, EventArgs.Empty);
+
+    private void OnPlaybackEnded(object? sender, EventArgs eventArgs)
+    {
+        RaiseSafely(StateChanged, EventArgs.Empty);
+        RaiseSafely(PlaybackEnded, EventArgs.Empty);
+    }
 
     private void OnEncounteredError(object? sender, EventArgs eventArgs) =>
         RaiseError(new PlaybackErrorEventArgs(

@@ -20,5 +20,23 @@ public sealed class PlaylistPresentationTests
         Assert.Equal(paths, entries.Select(entry => entry.Path));
         Assert.Equal(["first.mp4", "missing.wmv", "first.mp4"], entries.Select(entry => entry.FileName));
         Assert.Equal([false, true, false], entries.Select(entry => entry.IsMissing));
+        Assert.All(entries, entry => Assert.False(entry.HasLoadError));
+        Assert.All(entries, entry => Assert.False(entry.IsCurrent));
+    }
+
+    [Fact]
+    public void From_MarksCurrentAndLoadErrorRegistrationsByIndex()
+    {
+        var paths = new[] { Path.GetFullPath("same.mp4"), Path.GetFullPath("same.mp4") };
+
+        var entries = PlaylistPresentation.From(
+            paths,
+            _ => true,
+            currentIndex: 1,
+            loadErrorIndices: new HashSet<int> { 0 });
+
+        Assert.True(entries[0].HasLoadError);
+        Assert.Equal("読み込み不能", entries[0].StatusText);
+        Assert.True(entries[1].IsCurrent);
     }
 }

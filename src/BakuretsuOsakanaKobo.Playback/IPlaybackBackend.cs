@@ -6,6 +6,8 @@ public interface IPlaybackBackend : IDisposable
 
     event EventHandler? StateChanged;
 
+    event EventHandler? PlaybackEnded;
+
     bool IsPlaying { get; }
 
     bool IsSeekable { get; }

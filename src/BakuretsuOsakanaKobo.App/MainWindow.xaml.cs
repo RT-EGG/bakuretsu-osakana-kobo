@@ -11,6 +11,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 using BakuretsuOsakanaKobo.Infrastructure.Errors;
+using BakuretsuOsakanaKobo.Infrastructure.Diagnostics;
 using BakuretsuOsakanaKobo.Infrastructure.Persistence;
 using BakuretsuOsakanaKobo.Playback;
 using Microsoft.Win32;
@@ -56,6 +57,10 @@ public partial class MainWindow : Window
     private Task<JsonSaveResult>? _videoProfileSaveTask;
     private Task? _recentFileMutationTask;
     private Task? _playlistMutationTask;
+    private Task? _playlistAdvanceTask;
+    private int? _playlistCurrentIndex;
+    private readonly HashSet<int> _playlistLoadErrorIndices = [];
+    private int _isOpeningPlaylistCandidate;
     private DateTime _seekPresentationHoldUntilUtc;
     private bool _closeRequested;
     private bool _allowClose;
@@ -124,6 +129,7 @@ public partial class MainWindow : Window
         {
             playbackBackend.ErrorOccurred += PlaybackBackend_OnErrorOccurred;
             playbackBackend.StateChanged += PlaybackBackend_OnStateChanged;
+            playbackBackend.PlaybackEnded += PlaybackBackend_OnPlaybackEnded;
             _playbackTimelineTimer.Start();
         }
 
@@ -274,9 +280,12 @@ public partial class MainWindow : Window
         playlistWindow.EntriesAddRequested += PlaylistWindow_OnEntriesAddRequested;
         playlistWindow.EntriesRemoveRequested += PlaylistWindow_OnEntriesRemoveRequested;
         playlistWindow.EntryMoveRequested += PlaylistWindow_OnEntryMoveRequested;
+        playlistWindow.PlayRequested += PlaylistWindow_OnPlayRequested;
         playlistWindow.Closed += PlaylistWindow_OnClosed;
         _playlistWindow = playlistWindow;
         playlistWindow.Show();
+        playlistWindow.UpdatePlaybackState(_playlistCurrentIndex, _playlistLoadErrorIndices);
+        playlistWindow.SetPlaybackRequestBusy(_playlistAdvanceTask is not null);
     }
 
     private async void PlaylistWindow_OnLoopChanged(
@@ -425,7 +434,8 @@ public partial class MainWindow : Window
         await PersistPlaylistMutationAsync(
             sender as PlaylistWindow,
             playlist => playlist.RemoveAtIndicesAsync(eventArgs.Indices),
-            $"{eventArgs.Indices.Count}件をプレイリストから削除しました。元の動画ファイルは削除していません。");
+            $"{eventArgs.Indices.Count}件をプレイリストから削除しました。元の動画ファイルは削除していません。",
+            () => RemapPlaylistPlaybackAfterRemoval(eventArgs.Indices));
     }
 
     private async void PlaylistWindow_OnEntryMoveRequested(
@@ -437,13 +447,169 @@ public partial class MainWindow : Window
             playlist => playlist.MoveToInsertionIndexAsync(
                 eventArgs.SourceIndex,
                 eventArgs.InsertionIndex),
-            "再生順を変更しました。");
+            "再生順を変更しました。",
+            () => RemapPlaylistPlaybackAfterMove(
+                eventArgs.SourceIndex,
+                eventArgs.InsertionIndex));
     }
+
+    private void PlaylistWindow_OnPlayRequested(
+        object? sender,
+        PlaylistPlayRequestedEventArgs eventArgs) =>
+        QueuePlaylistPlayback(eventArgs.StartIndex, isNewSession: true);
+
+    private void QueuePlaylistPlayback(int startIndex, bool isNewSession)
+    {
+        if (_playlistAdvanceTask is not null || _openTask is not null ||
+            _playlistMutationTask is not null ||
+            _playlist is null || _playbackBackend is null || _closeRequested)
+        {
+            return;
+        }
+
+        var task = PlayPlaylistFromIndexAsync(startIndex, isNewSession);
+        _playlistAdvanceTask = task;
+        _ = ObservePlaylistAdvanceAsync(task);
+    }
+
+    private async Task ObservePlaylistAdvanceAsync(Task task)
+    {
+        try
+        {
+            await task;
+        }
+        catch (Exception exception)
+        {
+            _errorReporter?.Report(
+                new UserNotification(
+                    UserNotificationSeverity.Error,
+                    "プレイリストの再生を続行できませんでした。",
+                    "プレイリストを確認して、もう一度再生してください。"),
+                "playlist-advance-unexpected-failure",
+                exception.Message,
+                exception);
+        }
+        finally
+        {
+            if (ReferenceEquals(_playlistAdvanceTask, task))
+            {
+                _playlistAdvanceTask = null;
+            }
+
+            if (!_closeRequested)
+            {
+                _playlistWindow?.SetPlaybackRequestBusy(false);
+            }
+        }
+    }
+
+    private async Task PlayPlaylistFromIndexAsync(int startIndex, bool isNewSession)
+    {
+        await Dispatcher.Yield(DispatcherPriority.Background);
+        _playlistWindow?.SetPlaybackRequestBusy(true);
+        var playlist = _playlist;
+        if (playlist is null)
+        {
+            return;
+        }
+
+        var entries = playlist.GetSnapshot().Entries;
+        if (startIndex < 0 || startIndex > entries.Count)
+        {
+            return;
+        }
+
+        if (isNewSession)
+        {
+            _playlistCurrentIndex = null;
+            _playlistLoadErrorIndices.Clear();
+            UpdatePlaylistPlaybackPresentation();
+        }
+
+        var candidates = PlaylistPlaybackSequence.GetExistingCandidateIndices(
+            entries,
+            startIndex,
+            File.Exists);
+        foreach (var candidateIndex in candidates)
+        {
+            if (_closeRequested)
+            {
+                return;
+            }
+
+            Interlocked.Exchange(ref _isOpeningPlaylistCandidate, 1);
+            bool opened;
+            try
+            {
+                opened = await OpenVideoFromPlaylistAsync(entries[candidateIndex]);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _isOpeningPlaylistCandidate, 0);
+            }
+
+            if (opened)
+            {
+                _playlistCurrentIndex = candidateIndex;
+                UpdatePlaylistPlaybackPresentation();
+                return;
+            }
+
+            _playlistLoadErrorIndices.Add(candidateIndex);
+            UpdatePlaylistPlaybackPresentation();
+        }
+
+        _playlistCurrentIndex = null;
+        UpdatePlaylistPlaybackPresentation();
+        _playlistWindow?.ShowPlaybackNotification(isNewSession
+            ? "再生可能な項目がありません。欠損項目または読み込み不能項目を確認してください。"
+            : "プレイリストの末尾に到達したため停止しました。");
+    }
+
+    private async Task<bool> OpenVideoFromPlaylistAsync(string path)
+    {
+        if (_playbackBackend is null || _openTask is not null || _closeRequested)
+        {
+            return false;
+        }
+
+        _isOpeningVideo = true;
+        var openTask = OpenVideoAsync(path);
+        _openTask = openTask;
+        try
+        {
+            UpdatePlaybackButton();
+            UpdatePlaybackTimeline();
+            UpdateVolumeControls();
+            UpdatePlaybackRateControls();
+            return await openTask;
+        }
+        finally
+        {
+            if (ReferenceEquals(_openTask, openTask))
+            {
+                _openTask = null;
+            }
+
+            _isOpeningVideo = false;
+            if (!_closeRequested)
+            {
+                UpdatePlaybackButton();
+                UpdatePlaybackTimeline();
+                UpdateVolumeControls();
+                UpdatePlaybackRateControls();
+            }
+        }
+    }
+
+    private void UpdatePlaylistPlaybackPresentation() =>
+        _playlistWindow?.UpdatePlaybackState(_playlistCurrentIndex, _playlistLoadErrorIndices);
 
     private async Task PersistPlaylistMutationAsync(
         PlaylistWindow? playlistWindow,
         Func<PlaylistRepository, Task<JsonSaveResult>> mutation,
-        string notification)
+        string notification,
+        Action? onMutationApplied = null)
     {
         var playlist = _playlist;
         if (playlist is null || _closeRequested)
@@ -490,6 +656,7 @@ public partial class MainWindow : Window
         }
         finally
         {
+            onMutationApplied?.Invoke();
             if (ReferenceEquals(_playlistMutationTask, mutationTask))
             {
                 _playlistMutationTask = null;
@@ -511,6 +678,37 @@ public partial class MainWindow : Window
         }
     }
 
+    private void RemapPlaylistPlaybackAfterRemoval(IReadOnlyList<int> removedIndices)
+    {
+        var removed = removedIndices.Distinct().Order().ToArray();
+        _playlistCurrentIndex = PlaylistPlaybackSequence.RemapAfterRemoval(_playlistCurrentIndex, removed);
+        var remappedErrors = _playlistLoadErrorIndices
+            .Select(index => PlaylistPlaybackSequence.RemapAfterRemoval(index, removed))
+            .Where(index => index is not null)
+            .Select(index => index!.Value)
+            .ToArray();
+        _playlistLoadErrorIndices.Clear();
+        _playlistLoadErrorIndices.UnionWith(remappedErrors);
+        UpdatePlaylistPlaybackPresentation();
+    }
+
+    private void RemapPlaylistPlaybackAfterMove(int sourceIndex, int insertionIndex)
+    {
+        _playlistCurrentIndex = PlaylistPlaybackSequence.RemapAfterMove(
+            _playlistCurrentIndex,
+            sourceIndex,
+            insertionIndex);
+        var remappedErrors = _playlistLoadErrorIndices
+            .Select(index => PlaylistPlaybackSequence.RemapAfterMove(
+                index,
+                sourceIndex,
+                insertionIndex)!.Value)
+            .ToArray();
+        _playlistLoadErrorIndices.Clear();
+        _playlistLoadErrorIndices.UnionWith(remappedErrors);
+        UpdatePlaylistPlaybackPresentation();
+    }
+
     private void PlaylistWindow_OnClosed(object? sender, EventArgs eventArgs)
     {
         if (sender is PlaylistWindow playlistWindow)
@@ -519,6 +717,7 @@ public partial class MainWindow : Window
             playlistWindow.EntriesAddRequested -= PlaylistWindow_OnEntriesAddRequested;
             playlistWindow.EntriesRemoveRequested -= PlaylistWindow_OnEntriesRemoveRequested;
             playlistWindow.EntryMoveRequested -= PlaylistWindow_OnEntryMoveRequested;
+            playlistWindow.PlayRequested -= PlaylistWindow_OnPlayRequested;
             playlistWindow.Closed -= PlaylistWindow_OnClosed;
         }
 
@@ -562,11 +761,11 @@ public partial class MainWindow : Window
         }
     }
 
-    internal async Task OpenVideoAsync(string path)
+    internal async Task<bool> OpenVideoAsync(string path)
     {
         if (_playbackBackend is null || _errorReporter is null)
         {
-            return;
+            return false;
         }
 
         EndTemporaryPlaybackRateGesture();
@@ -582,6 +781,7 @@ public partial class MainWindow : Window
 
         using var openCancellation = new CancellationTokenSource();
         _openCancellation = openCancellation;
+        var opened = false;
 
         try
         {
@@ -592,6 +792,7 @@ public partial class MainWindow : Window
                     initialState,
                     openCancellation.Token))
             {
+                opened = true;
                 _hasPlaybackError = false;
                 EmptyStatePanel.Visibility = Visibility.Collapsed;
                 Title = $"{Path.GetFileName(path)} - {ApplicationInfo.DisplayName}";
@@ -613,15 +814,27 @@ public partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            _errorReporter.Report(
-                new UserNotification(
-                    UserNotificationSeverity.Error,
-                    "動画を開けませんでした。",
-                    "別の動画を選択してください。"),
-                "playback-open-unexpected-failure",
-                exception.Message,
-                exception,
-                path);
+            if (Volatile.Read(ref _isOpeningPlaylistCandidate) != 0)
+            {
+                _errorReporter.ReportDiagnostic(
+                    DiagnosticSeverity.Error,
+                    "playlist-candidate-open-unexpected-failure",
+                    exception.Message,
+                    exception,
+                    path);
+            }
+            else
+            {
+                _errorReporter.Report(
+                    new UserNotification(
+                        UserNotificationSeverity.Error,
+                        "動画を開けませんでした。",
+                        "別の動画を選択してください。"),
+                    "playback-open-unexpected-failure",
+                    exception.Message,
+                    exception,
+                    path);
+            }
             if (!hadCurrentVideo)
             {
                 ShowEmptyState();
@@ -642,6 +855,8 @@ public partial class MainWindow : Window
                 UpdatePlaybackRateControls();
             }
         }
+
+        return opened;
     }
 
     private void PlayPauseButton_OnClick(object sender, RoutedEventArgs e)
@@ -730,13 +945,13 @@ public partial class MainWindow : Window
         UpdatePlaybackRateControls();
     }
 
-    private void PlaybackBackend_OnErrorOccurred(object? sender, PlaybackErrorEventArgs eventArgs)
+    private void PlaybackBackend_OnPlaybackEnded(object? sender, EventArgs eventArgs)
     {
         if (!Dispatcher.CheckAccess())
         {
             try
             {
-                _ = Dispatcher.BeginInvoke(() => PlaybackBackend_OnErrorOccurred(sender, eventArgs));
+                _ = Dispatcher.BeginInvoke(() => PlaybackBackend_OnPlaybackEnded(sender, eventArgs));
             }
             catch (InvalidOperationException)
             {
@@ -746,8 +961,50 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (_playlistCurrentIndex is { } currentIndex)
+        {
+            QueuePlaylistPlayback(currentIndex + 1, isNewSession: false);
+        }
+    }
+
+    private void PlaybackBackend_OnErrorOccurred(object? sender, PlaybackErrorEventArgs eventArgs)
+    {
+        var isPlaylistCandidate = Volatile.Read(ref _isOpeningPlaylistCandidate) != 0;
+        if (!Dispatcher.CheckAccess())
+        {
+            try
+            {
+                _ = Dispatcher.BeginInvoke(() =>
+                    HandlePlaybackError(eventArgs, isPlaylistCandidate));
+            }
+            catch (InvalidOperationException)
+            {
+                // The window Dispatcher is already shutting down.
+            }
+
+            return;
+        }
+
+        HandlePlaybackError(eventArgs, isPlaylistCandidate);
+    }
+
+    private void HandlePlaybackError(
+        PlaybackErrorEventArgs eventArgs,
+        bool isPlaylistCandidate)
+    {
         if (_disposed || _errorReporter is null)
         {
+            return;
+        }
+
+        if (isPlaylistCandidate)
+        {
+            _errorReporter.ReportDiagnostic(
+                DiagnosticSeverity.Error,
+                $"playlist-{eventArgs.EventCode}",
+                eventArgs.TechnicalMessage,
+                eventArgs.Exception,
+                eventArgs.TargetPath);
             return;
         }
 
@@ -794,7 +1051,8 @@ public partial class MainWindow : Window
                 _ = CloseAfterPendingWorkCompletesAsync(
                     _openTask,
                     _recentFileMutationTask,
-                    _playlistMutationTask);
+                    _playlistMutationTask,
+                    _playlistAdvanceTask);
             }
 
             return;
@@ -812,6 +1070,7 @@ public partial class MainWindow : Window
             _playlistWindow.EntriesAddRequested -= PlaylistWindow_OnEntriesAddRequested;
             _playlistWindow.EntriesRemoveRequested -= PlaylistWindow_OnEntriesRemoveRequested;
             _playlistWindow.EntryMoveRequested -= PlaylistWindow_OnEntryMoveRequested;
+            _playlistWindow.PlayRequested -= PlaylistWindow_OnPlayRequested;
             _playlistWindow.Closed -= PlaylistWindow_OnClosed;
             _playlistWindow.Close();
             _playlistWindow = null;
@@ -834,6 +1093,7 @@ public partial class MainWindow : Window
         {
             _playbackBackend.ErrorOccurred -= PlaybackBackend_OnErrorOccurred;
             _playbackBackend.StateChanged -= PlaybackBackend_OnStateChanged;
+            _playbackBackend.PlaybackEnded -= PlaybackBackend_OnPlaybackEnded;
         }
 
         VideoView.MediaPlayer = null;
@@ -1033,7 +1293,8 @@ public partial class MainWindow : Window
     private async Task CloseAfterPendingWorkCompletesAsync(
         Task? openTask,
         Task? recentFileMutationTask,
-        Task? playlistMutationTask)
+        Task? playlistMutationTask,
+        Task? playlistAdvanceTask)
     {
         // OnClosing must return before Close is requested again when there is no pending work.
         await Dispatcher.Yield(DispatcherPriority.Background);
@@ -1041,6 +1302,7 @@ public partial class MainWindow : Window
         await IgnoreReportedPendingFailureAsync(openTask);
         await IgnoreReportedPendingFailureAsync(recentFileMutationTask);
         await IgnoreReportedPendingFailureAsync(playlistMutationTask);
+        await IgnoreReportedPendingFailureAsync(playlistAdvanceTask);
 
         try
         {

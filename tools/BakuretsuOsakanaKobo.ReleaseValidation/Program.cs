@@ -150,7 +150,12 @@ internal static class Program
                 var lengthMilliseconds = backend.LengthMilliseconds;
                 if (validatePlaylist)
                 {
-                    playlistValidation = await ValidatePlaylistAsync(window, playlist!);
+                    playlistValidation = await ValidatePlaylistAsync(
+                        window,
+                        backend,
+                        playlist!,
+                        notificationSink,
+                        diagnosticLog);
                     exitCode = 0;
                     return;
                 }
@@ -427,7 +432,10 @@ internal static class Program
 
     private static async Task<PlaylistValidation> ValidatePlaylistAsync(
         MainWindow window,
-        PlaylistRepository repository)
+        LibVlcPlaybackBackend backend,
+        PlaylistRepository repository,
+        RecordingNotificationSink notificationSink,
+        RecordingDiagnosticLog diagnosticLog)
     {
         var playlistMenu = (MenuItem)window.FindName("PlaylistMenuItem");
         playlistMenu.IsChecked = true;
@@ -518,6 +526,67 @@ internal static class Program
             notificationText.Text.Contains("再生順を変更", StringComparison.Ordinal),
             "Playlist reorder completion was not announced.");
 
+        var corruptPath = Path.Combine(
+            Path.GetDirectoryName(repository.FilePath)!,
+            "unsupported-playlist.mkv");
+        await File.WriteAllTextAsync(corruptPath, "not a media file");
+        Ensure((await repository.AddEntriesAsync([corruptPath])).Success, "Could not add corrupt playlist fixture.");
+        Ensure(
+            (await repository.MoveToInsertionIndexAsync(3, 1)).Success,
+            "Could not position corrupt playlist fixture.");
+        playlistWindow.CompletePersistence(repository.GetSnapshot().Entries, enablePersistence: true);
+        var playPlaylistButton = (Button)playlistWindow.FindName("PlayPlaylistButton");
+        Ensure(playPlaylistButton.IsEnabled, "Playlist play was not enabled with playable entries.");
+        var notificationCountBeforePlayback = notificationSink.Notifications.Count;
+        playPlaylistButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, playPlaylistButton));
+        await WaitUntilAsync(
+            () =>
+            {
+                var playbackEntries = playlistList.Items.Cast<PlaylistEntryPresentation>().ToArray();
+                return playbackEntries.Length == 4 &&
+                       playbackEntries[1].HasLoadError &&
+                       playbackEntries[2].IsCurrent &&
+                       backend.IsPlaying;
+            },
+            TimeSpan.FromSeconds(10),
+            "Playlist playback did not skip missing and unreadable entries.");
+        Ensure(
+            notificationSink.Notifications.Count == notificationCountBeforePlayback,
+            "A skipped playlist load error was shown as a user error.");
+        Ensure(
+            diagnosticLog.Events.Any(item =>
+                item.EventName.StartsWith("playlist-playback-", StringComparison.Ordinal) &&
+                string.Equals(item.TargetPath, corruptPath, StringComparison.OrdinalIgnoreCase)),
+            "A skipped playlist load error was not recorded in diagnostics.");
+
+        backend.Seek(0.995);
+        await WaitUntilAsync(
+            () => playlistList.Items.Cast<PlaylistEntryPresentation>().ElementAt(3).IsCurrent,
+            TimeSpan.FromSeconds(10),
+            "Natural end did not advance to the next duplicate registration.");
+        backend.Seek(0.995);
+        await WaitUntilAsync(
+            () => playlistList.Items.Cast<PlaylistEntryPresentation>().All(entry => !entry.IsCurrent) &&
+                  notificationText.Text.Contains("末尾に到達", StringComparison.Ordinal),
+            TimeSpan.FromSeconds(10),
+            "Playlist playback did not stop and announce the end of the list.");
+
+        var lastItem = (ListBoxItem?)playlistList.ItemContainerGenerator.ContainerFromIndex(3)
+            ?? throw new InvalidOperationException("The last playlist item was not realized.");
+        RaiseDoubleClick(playlistList, lastItem);
+        await WaitUntilAsync(
+            () => playlistList.Items.Cast<PlaylistEntryPresentation>().ElementAt(3).IsCurrent,
+            TimeSpan.FromSeconds(10),
+            "Double-click did not start playback from the selected registration.");
+        backend.Seek(0.995);
+        await WaitUntilAsync(
+            () => playlistList.Items.Cast<PlaylistEntryPresentation>().All(entry => !entry.IsCurrent),
+            TimeSpan.FromSeconds(10),
+            "Double-click playback did not finish at the end of the list.");
+
+        Ensure((await repository.RemoveAtIndicesAsync([1])).Success, "Could not remove corrupt playlist fixture.");
+        playlistWindow.CompletePersistence(repository.GetSnapshot().Entries, enablePersistence: true);
+
         loopToggle.IsChecked = false;
         await WaitUntilAsync(
             () => !repository.GetSnapshot().Loop && loopToggle.IsEnabled,
@@ -552,6 +621,10 @@ internal static class Program
             MultipleSelectionRemoved: true,
             SourceFilesPreserved: true,
             DragReorderPersisted: true,
+            PlaySkippedMissingAndLoadError: true,
+            NaturalEndAdvanced: true,
+            DoubleClickStartedSelected: true,
+            EndOfListStopped: true,
             FinalEntryCount: repository.GetSnapshot().Entries.Count,
             DuplicateEntriesPreserved: true,
             MissingEntriesMarked: true,
@@ -1028,6 +1101,19 @@ internal static class Program
         eventArgs.RoutedEvent = routedEvent;
         target.RaiseEvent(eventArgs);
         return eventArgs;
+    }
+
+    private static void RaiseDoubleClick(ListBox list, ListBoxItem item)
+    {
+        var eventArgs = new MouseButtonEventArgs(
+            Mouse.PrimaryDevice,
+            Environment.TickCount,
+            MouseButton.Left)
+        {
+            RoutedEvent = Control.MouseDoubleClickEvent,
+            Source = item,
+        };
+        list.RaiseEvent(eventArgs);
     }
 
     private static async Task<RealtimeAudioDiagnostics> ValidateNaturalDrainAsync(
@@ -2060,6 +2146,10 @@ internal static class Program
         bool MultipleSelectionRemoved,
         bool SourceFilesPreserved,
         bool DragReorderPersisted,
+        bool PlaySkippedMissingAndLoadError,
+        bool NaturalEndAdvanced,
+        bool DoubleClickStartedSelected,
+        bool EndOfListStopped,
         int FinalEntryCount,
         bool DuplicateEntriesPreserved,
         bool MissingEntriesMarked,

@@ -5,6 +5,7 @@ internal static class PlaylistPlaybackSequence
     public static IReadOnlyList<int> GetExistingCandidateIndices(
         IReadOnlyList<string> entries,
         int startIndex,
+        bool wrapToStart,
         Func<string, bool> fileExists)
     {
         ArgumentNullException.ThrowIfNull(entries);
@@ -14,7 +15,11 @@ internal static class PlaylistPlaybackSequence
             throw new ArgumentOutOfRangeException(nameof(startIndex));
         }
 
-        return Enumerable.Range(startIndex, entries.Count - startIndex)
+        var forward = Enumerable.Range(startIndex, entries.Count - startIndex);
+        var indices = wrapToStart
+            ? forward.Concat(Enumerable.Range(0, startIndex))
+            : forward;
+        return indices
             .Where(index => fileExists(entries[index]))
             .ToArray();
     }

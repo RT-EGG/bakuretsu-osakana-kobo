@@ -12,6 +12,7 @@ public sealed class PlaylistPlaybackSequenceTests
         var candidates = PlaylistPlaybackSequence.GetExistingCandidateIndices(
             entries,
             startIndex: 1,
+            wrapToStart: false,
             path => path != "missing.wmv");
 
         Assert.Equal([2, 3], candidates);
@@ -24,9 +25,41 @@ public sealed class PlaylistPlaybackSequenceTests
     {
         var entries = new[] { "a.mp4", "b.mp4", "c.mp4" };
 
-        var candidates = PlaylistPlaybackSequence.GetExistingCandidateIndices(entries, startIndex, _ => true);
+        var candidates = PlaylistPlaybackSequence.GetExistingCandidateIndices(
+            entries,
+            startIndex,
+            wrapToStart: false,
+            _ => true);
 
         Assert.Equal(Enumerable.Range(startIndex, entries.Length - startIndex), candidates);
+    }
+
+    [Fact]
+    public void GetExistingCandidateIndices_WrapsOnceAndSkipsMissingEntries()
+    {
+        var entries = new[] { "first.mp4", "missing.wmv", "last.mp4" };
+
+        var candidates = PlaylistPlaybackSequence.GetExistingCandidateIndices(
+            entries,
+            startIndex: 3,
+            wrapToStart: true,
+            path => path != "missing.wmv");
+
+        Assert.Equal([0, 2], candidates);
+    }
+
+    [Fact]
+    public void GetExistingCandidateIndices_DoesNotRepeatCandidatesWhenWrapping()
+    {
+        var entries = new[] { "first.mp4", "middle.mp4", "last.mp4" };
+
+        var candidates = PlaylistPlaybackSequence.GetExistingCandidateIndices(
+            entries,
+            startIndex: 2,
+            wrapToStart: true,
+            _ => true);
+
+        Assert.Equal([2, 0, 1], candidates);
     }
 
     [Fact]

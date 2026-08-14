@@ -513,7 +513,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        var entries = playlist.GetSnapshot().Entries;
+        var snapshot = playlist.GetSnapshot();
+        var entries = snapshot.Entries;
         if (startIndex < 0 || startIndex > entries.Count)
         {
             return;
@@ -529,6 +530,7 @@ public partial class MainWindow : Window
         var candidates = PlaylistPlaybackSequence.GetExistingCandidateIndices(
             entries,
             startIndex,
+            wrapToStart: !isNewSession && snapshot.Loop,
             File.Exists);
         foreach (var candidateIndex in candidates)
         {
@@ -561,9 +563,10 @@ public partial class MainWindow : Window
 
         _playlistCurrentIndex = null;
         UpdatePlaylistPlaybackPresentation();
-        _playlistWindow?.ShowPlaybackNotification(isNewSession
-            ? "再生可能な項目がありません。欠損項目または読み込み不能項目を確認してください。"
-            : "プレイリストの末尾に到達したため停止しました。");
+        _playlistWindow?.ShowPlaybackNotification(
+            isNewSession || snapshot.Loop
+                ? "再生可能な項目がありません。欠損項目または読み込み不能項目を確認してください。"
+                : "プレイリストの末尾に到達したため停止しました。");
     }
 
     private async Task<bool> OpenVideoFromPlaylistAsync(string path)
@@ -604,6 +607,18 @@ public partial class MainWindow : Window
 
     private void UpdatePlaylistPlaybackPresentation() =>
         _playlistWindow?.UpdatePlaybackState(_playlistCurrentIndex, _playlistLoadErrorIndices);
+
+    private void CancelPlaylistPlayback()
+    {
+        if (_playlistCurrentIndex is null && _playlistLoadErrorIndices.Count == 0)
+        {
+            return;
+        }
+
+        _playlistCurrentIndex = null;
+        _playlistLoadErrorIndices.Clear();
+        UpdatePlaylistPlaybackPresentation();
+    }
 
     private async Task PersistPlaylistMutationAsync(
         PlaylistWindow? playlistWindow,
@@ -732,6 +747,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        CancelPlaylistPlayback();
         _isOpeningVideo = true;
         var openTask = OpenVideoAsync(path);
         _openTask = openTask;

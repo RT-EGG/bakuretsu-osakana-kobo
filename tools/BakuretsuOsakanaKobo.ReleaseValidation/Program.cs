@@ -89,10 +89,15 @@ internal static class Program
 
         var playlistFilePath = $"{Path.GetFullPath(args[1])}.playlist.json";
         PlaylistRepository? playlist = null;
+        string? playlistManualOpenPath = null;
         if (validatePlaylist)
         {
             var reportDirectory = Path.GetDirectoryName(Path.GetFullPath(args[1]))!;
             Directory.CreateDirectory(reportDirectory);
+            playlistManualOpenPath = Path.Combine(
+                reportDirectory,
+                $"playlist-manual-open{Path.GetExtension(args[0])}");
+            File.Copy(args[0], playlistManualOpenPath, overwrite: true);
             playlist = new PlaylistRepository(playlistFilePath);
             playlist.LoadAsync().GetAwaiter().GetResult();
             var existingPath = Path.GetFullPath(args[0]);
@@ -155,7 +160,8 @@ internal static class Program
                         backend,
                         playlist!,
                         notificationSink,
-                        diagnosticLog);
+                        diagnosticLog,
+                        playlistManualOpenPath!);
                     exitCode = 0;
                     return;
                 }
@@ -435,7 +441,8 @@ internal static class Program
         LibVlcPlaybackBackend backend,
         PlaylistRepository repository,
         RecordingNotificationSink notificationSink,
-        RecordingDiagnosticLog diagnosticLog)
+        RecordingDiagnosticLog diagnosticLog,
+        string manualOpenPath)
     {
         var playlistMenu = (MenuItem)window.FindName("PlaylistMenuItem");
         playlistMenu.IsChecked = true;
@@ -526,6 +533,12 @@ internal static class Program
             notificationText.Text.Contains("再生順を変更", StringComparison.Ordinal),
             "Playlist reorder completion was not announced.");
 
+        loopToggle.IsChecked = false;
+        await WaitUntilAsync(
+            () => !repository.GetSnapshot().Loop && loopToggle.IsEnabled,
+            TimeSpan.FromSeconds(5),
+            "Loop-off state was not saved before end-of-list validation.");
+
         var corruptPath = Path.Combine(
             Path.GetDirectoryName(repository.FilePath)!,
             "unsupported-playlist.mkv");
@@ -546,7 +559,8 @@ internal static class Program
                 return playbackEntries.Length == 4 &&
                        playbackEntries[1].HasLoadError &&
                        playbackEntries[2].IsCurrent &&
-                       backend.IsPlaying;
+                       backend.IsPlaying &&
+                       playPlaylistButton.IsEnabled;
             },
             TimeSpan.FromSeconds(10),
             "Playlist playback did not skip missing and unreadable entries.");
@@ -561,37 +575,139 @@ internal static class Program
 
         backend.Seek(0.995);
         await WaitUntilAsync(
-            () => playlistList.Items.Cast<PlaylistEntryPresentation>().ElementAt(3).IsCurrent,
+            () => playlistList.Items.Cast<PlaylistEntryPresentation>().ElementAt(3).IsCurrent &&
+                  playPlaylistButton.IsEnabled,
             TimeSpan.FromSeconds(10),
             "Natural end did not advance to the next duplicate registration.");
         backend.Seek(0.995);
         await WaitUntilAsync(
             () => playlistList.Items.Cast<PlaylistEntryPresentation>().All(entry => !entry.IsCurrent) &&
+                  playPlaylistButton.IsEnabled &&
                   notificationText.Text.Contains("末尾に到達", StringComparison.Ordinal),
             TimeSpan.FromSeconds(10),
             "Playlist playback did not stop and announce the end of the list.");
 
+        playlistList.UpdateLayout();
+        playlistList.ScrollIntoView(playlistList.Items[3]);
+        playlistList.UpdateLayout();
         var lastItem = (ListBoxItem?)playlistList.ItemContainerGenerator.ContainerFromIndex(3)
             ?? throw new InvalidOperationException("The last playlist item was not realized.");
         RaiseDoubleClick(playlistList, lastItem);
         await WaitUntilAsync(
-            () => playlistList.Items.Cast<PlaylistEntryPresentation>().ElementAt(3).IsCurrent,
+            () => playlistList.Items.Cast<PlaylistEntryPresentation>().ElementAt(3).IsCurrent &&
+                  playPlaylistButton.IsEnabled,
             TimeSpan.FromSeconds(10),
             "Double-click did not start playback from the selected registration.");
         backend.Seek(0.995);
         await WaitUntilAsync(
-            () => playlistList.Items.Cast<PlaylistEntryPresentation>().All(entry => !entry.IsCurrent),
+            () => playlistList.Items.Cast<PlaylistEntryPresentation>().All(entry => !entry.IsCurrent) &&
+                  playPlaylistButton.IsEnabled,
             TimeSpan.FromSeconds(10),
             "Double-click playback did not finish at the end of the list.");
 
         Ensure((await repository.RemoveAtIndicesAsync([1])).Success, "Could not remove corrupt playlist fixture.");
         playlistWindow.CompletePersistence(repository.GetSnapshot().Entries, enablePersistence: true);
 
+        loopToggle.IsChecked = true;
+        await WaitUntilAsync(
+            () => repository.GetSnapshot().Loop && loopToggle.IsEnabled,
+            TimeSpan.FromSeconds(5),
+            "Loop-on state was not saved for wrap validation.");
+
+        Ensure(
+            (await repository.ReplaceEntriesAsync([corruptPath])).Success,
+            "Could not prepare the no-playable playlist fixture.");
+        playlistWindow.CompletePersistence(repository.GetSnapshot().Entries, enablePersistence: true);
+        playPlaylistButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, playPlaylistButton));
+        await WaitUntilAsync(
+            () => playlistList.Items.Cast<PlaylistEntryPresentation>().Single().HasLoadError &&
+                  playPlaylistButton.IsEnabled &&
+                  notificationText.Text.Contains("再生可能な項目がありません", StringComparison.Ordinal),
+            TimeSpan.FromSeconds(10),
+            "A looped playlist with no playable entries did not stop with guidance.");
+        var noPlayableNotification = notificationText.Text;
+        await Task.Delay(500);
+        Ensure(
+            notificationText.Text == noPlayableNotification &&
+            playlistList.Items.Cast<PlaylistEntryPresentation>().All(entry => !entry.IsCurrent),
+            "The no-playable playlist did not remain stopped after its single notification.");
+
+        var loopValidationEntries = new[]
+        {
+            Path.GetFullPath(manualOpenPath),
+            expectedMovedOrder[1],
+            sourceVideoPath,
+        };
+        Ensure(
+            (await repository.ReplaceEntriesAsync(loopValidationEntries)).Success,
+            "Could not prepare distinct playlist entries for loop validation.");
+        playlistWindow.CompletePersistence(repository.GetSnapshot().Entries, enablePersistence: true);
+        playlistList.UpdateLayout();
+        playlistList.ScrollIntoView(playlistList.Items[2]);
+        playlistList.UpdateLayout();
+        var loopStartItem = (ListBoxItem?)playlistList.ItemContainerGenerator.ContainerFromIndex(2)
+            ?? throw new InvalidOperationException("The loop-start playlist item was not realized.");
+        RaiseDoubleClick(playlistList, loopStartItem);
+        await WaitUntilAsync(
+            () => playlistList.Items.Cast<PlaylistEntryPresentation>().ElementAt(2).IsCurrent &&
+                  playPlaylistButton.IsEnabled,
+            TimeSpan.FromSeconds(10),
+            "Loop validation did not start from the final registration.");
+        backend.Seek(0.995);
+        try
+        {
+            await WaitUntilAsync(
+                () => playlistList.Items.Cast<PlaylistEntryPresentation>().First().IsCurrent &&
+                      playPlaylistButton.IsEnabled &&
+                      backend.IsPlaying,
+                TimeSpan.FromSeconds(10),
+                "Loop-on playback did not wrap to the first playable registration.");
+        }
+        catch (TimeoutException exception)
+        {
+            var currentFlags = string.Join(
+                ",",
+                playlistList.Items.Cast<PlaylistEntryPresentation>().Select(entry => entry.IsCurrent));
+            throw new TimeoutException(
+                $"{exception.Message} loop={repository.GetSnapshot().Loop}, current=[{currentFlags}], " +
+                $"playing={backend.IsPlaying}, path={backend.CurrentPath}, notification={notificationText.Text}",
+                exception);
+        }
+
+        var videoSurface = (FrameworkElement)window.FindName("VideoInteractionSurface");
+        var manualOpenDrop = RaiseFileDragEvent(
+            videoSurface,
+            DragDrop.PreviewDropEvent,
+            [Path.GetFullPath(sourceVideoPath)]);
+        Ensure(manualOpenDrop.Handled, "The main-window manual-open drop was not handled.");
+        await WaitUntilAsync(
+            () => string.Equals(
+                      backend.CurrentPath,
+                      Path.GetFullPath(sourceVideoPath),
+                      StringComparison.OrdinalIgnoreCase) &&
+                  backend.IsPlaying &&
+                  playlistList.Items.Cast<PlaylistEntryPresentation>().All(entry => !entry.IsCurrent),
+            TimeSpan.FromSeconds(10),
+            "Opening a video from the main window did not cancel continuous playlist playback.");
+        backend.Seek(0.995);
+        await WaitUntilAsync(
+            () => !backend.IsPlaying,
+            TimeSpan.FromSeconds(10),
+            "The manually opened video did not reach its natural end.");
+        Ensure(
+            playlistList.Items.Cast<PlaylistEntryPresentation>().All(entry => !entry.IsCurrent),
+            "Playlist playback resumed after the manually opened video ended.");
+
+        Ensure(
+            (await repository.ReplaceEntriesAsync(expectedMovedOrder)).Success,
+            "Could not restore final playlist entries after loop validation.");
+        playlistWindow.CompletePersistence(repository.GetSnapshot().Entries, enablePersistence: true);
+
         loopToggle.IsChecked = false;
         await WaitUntilAsync(
             () => !repository.GetSnapshot().Loop && loopToggle.IsEnabled,
             TimeSpan.FromSeconds(5),
-            "Loop-off state was not saved.");
+            "Final loop-off state was not saved.");
 
         playlistWindow.Close();
         await WaitUntilAsync(
@@ -625,6 +741,9 @@ internal static class Program
             NaturalEndAdvanced: true,
             DoubleClickStartedSelected: true,
             EndOfListStopped: true,
+            LoopWrappedToFirstPlayable: true,
+            NoPlayableStoppedOnce: true,
+            MainWindowOpenCanceledContinuousPlayback: true,
             FinalEntryCount: repository.GetSnapshot().Entries.Count,
             DuplicateEntriesPreserved: true,
             MissingEntriesMarked: true,
@@ -2150,6 +2269,9 @@ internal static class Program
         bool NaturalEndAdvanced,
         bool DoubleClickStartedSelected,
         bool EndOfListStopped,
+        bool LoopWrappedToFirstPlayable,
+        bool NoPlayableStoppedOnce,
+        bool MainWindowOpenCanceledContinuousPlayback,
         int FinalEntryCount,
         bool DuplicateEntriesPreserved,
         bool MissingEntriesMarked,

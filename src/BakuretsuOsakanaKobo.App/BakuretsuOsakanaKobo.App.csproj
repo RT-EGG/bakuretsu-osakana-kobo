@@ -4,6 +4,7 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\BakuretsuOsakanaKobo.ico</ApplicationIcon>
     <AssemblyName>BakuretsuOsakanaKobo</AssemblyName>
     <RootNamespace>BakuretsuOsakanaKobo</RootNamespace>
     <PlatformTarget>x64</PlatformTarget>
@@ -16,6 +17,10 @@
     <VlcWindowsX86Enabled>false</VlcWindowsX86Enabled>
     <VlcWindowsArm64Enabled>false</VlcWindowsArm64Enabled>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\BakuretsuOsakanaKobo.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="LibVLCSharp.WPF" Version="3.10.0" />

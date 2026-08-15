@@ -5,6 +5,7 @@
         <SolidColorBrush x:Key="AppBackgroundBrush" Color="#0C1119" />
         <SolidColorBrush x:Key="TextBrush" Color="#F2F6FC" />
         <SolidColorBrush x:Key="MutedTextBrush" Color="#9DABC0" />
+        <SolidColorBrush x:Key="ErrorBrush" Color="#FF6B79" />
         <SolidColorBrush x:Key="PanelBrush" Color="#151D29" />
         <SolidColorBrush x:Key="PanelRaisedBrush" Color="#1C2634" />
         <SolidColorBrush x:Key="BorderBrush" Color="#344156" />

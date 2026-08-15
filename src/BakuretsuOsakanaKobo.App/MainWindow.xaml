@@ -112,6 +112,49 @@
                                    Foreground="{StaticResource MutedTextBrush}"
                                    Text="MP4 または WMV をここにドラッグ＆ドロップできます" />
                     </StackPanel>
+                    <Border x:Name="PlaybackErrorOverlay"
+                            Background="#C205080D"
+                            Visibility="Collapsed"
+                            AutomationProperties.Name="再生中にエラーが発生しました">
+                        <StackPanel Width="430"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center">
+                            <Border Width="62"
+                                    Height="62"
+                                    HorizontalAlignment="Center"
+                                    Background="#3A1C28"
+                                    CornerRadius="31">
+                                <TextBlock HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           FontSize="30"
+                                           FontWeight="Bold"
+                                           Foreground="{StaticResource ErrorBrush}"
+                                           Text="!" />
+                            </Border>
+                            <TextBlock Margin="0,18,0,0"
+                                       HorizontalAlignment="Center"
+                                       FontSize="22"
+                                       FontWeight="SemiBold"
+                                       Text="再生中にエラーが発生しました" />
+                            <TextBlock x:Name="PlaybackErrorMessageText"
+                                       Margin="0,8,0,6"
+                                       HorizontalAlignment="Center"
+                                       TextAlignment="Center"
+                                       TextWrapping="Wrap"
+                                       Foreground="{StaticResource MutedTextBrush}"
+                                       Text="動画の破損により再生を続けられません。別の動画を選択してください。" />
+                            <TextBlock Margin="0,0,0,20"
+                                       HorizontalAlignment="Center"
+                                       FontSize="11"
+                                       Foreground="{StaticResource MutedTextBrush}"
+                                       Text="診断用の詳細はログに記録しました。" />
+                            <Button Width="152"
+                                    HorizontalAlignment="Center"
+                                    Style="{StaticResource PlaylistPrimaryButtonStyle}"
+                                    Click="PlaybackErrorOpenFileButton_OnClick"
+                                    Content="別の動画を開く" />
+                        </StackPanel>
+                    </Border>
                     <Border x:Name="DropTargetOverlay"
                             Margin="24"
                             Background="#E6172635"

@@ -35,6 +35,11 @@ internal static class Program
             return RunThumbnailWorkerValidationAsync(args[0], args[1]).GetAwaiter().GetResult();
         }
 
+        if (Environment.GetEnvironmentVariable("BOK_PLAYBACK_ERROR_VALIDATION") == "1")
+        {
+            return RunPlaybackErrorValidation(args[0], args[1]);
+        }
+
         var processClock = Stopwatch.StartNew();
         var validateProfiles = Environment.GetEnvironmentVariable("BOK_VIDEO_PROFILE_VALIDATION") == "1";
         var validateGestures = Environment.GetEnvironmentVariable("BOK_GESTURE_VALIDATION") == "1";
@@ -596,6 +601,189 @@ internal static class Program
         WriteReport(reportPath, report);
         Console.WriteLine(JsonSerializer.Serialize(report));
         return 0;
+    }
+
+    private static int RunPlaybackErrorValidation(
+        string validVideoPath,
+        string reportPath)
+    {
+        var fullValidVideoPath = Path.GetFullPath(validVideoPath);
+        var repositoryRoot = Path.GetFullPath(Path.Combine(
+            Path.GetDirectoryName(fullValidVideoPath)!,
+            "..",
+            ".."));
+        var truncatedVideoPath = Path.Combine(
+            repositoryRoot,
+            ".tmp",
+            "edge-case-videos",
+            "edge-truncated.mp4");
+        var fakeVideoPath = Path.Combine(
+            repositoryRoot,
+            ".tmp",
+            "edge-case-videos",
+            "edge-not-media.mp4");
+        Ensure(File.Exists(truncatedVideoPath), $"Missing truncated validation video: {truncatedVideoPath}");
+        Ensure(File.Exists(fakeVideoPath), $"Missing fake validation video: {fakeVideoPath}");
+
+        var application = new Application();
+        AddProductResources(application.Resources);
+        var window = new MainWindow
+        {
+            ShowInTaskbar = false,
+            WindowStartupLocation = WindowStartupLocation.CenterScreen,
+        };
+        var backend = new LibVlcPlaybackBackend();
+        backend.SetMuted(true);
+        var notificationSink = new RecordingNotificationSink();
+        var diagnosticLog = new RecordingDiagnosticLog();
+        window.ConfigureServices(
+            new PortableDataPaths(AppContext.BaseDirectory),
+            new ErrorReporter(diagnosticLog, notificationSink),
+            backend);
+
+        object? validation = null;
+        var exitCode = 1;
+        var playbackEndedCount = 0;
+        backend.PlaybackEnded += (_, _) => Interlocked.Increment(ref playbackEndedCount);
+        window.Loaded += async (_, _) =>
+        {
+            try
+            {
+                var seekSlider = (Slider)window.FindName("SeekSlider");
+                await MeasureOpenAsync(window, seekSlider, backend, fullValidVideoPath);
+                await WaitUntilAsync(
+                    () => backend.TimeMilliseconds >= 500,
+                    TimeSpan.FromSeconds(5),
+                    "The valid baseline video did not advance before the fake-file check.");
+                var baselinePath = backend.CurrentPath;
+                var baselineTimeBeforeFake = backend.TimeMilliseconds;
+
+                await window.HandleLaunchRequestAsync(new LaunchRequest
+                {
+                    FileArguments = [fakeVideoPath],
+                });
+                var baselineTimeAfterFake = backend.TimeMilliseconds;
+                var fakePreservedPath = string.Equals(
+                    backend.CurrentPath,
+                    baselinePath,
+                    StringComparison.OrdinalIgnoreCase);
+                Ensure(
+                    fakePreservedPath,
+                    "The fake MP4 replaced the valid baseline video.");
+                Ensure(!window.HasPlaybackError, "A preflight fake-MP4 rejection became a runtime error.");
+                Ensure(
+                    notificationSink.Notifications.Any(notification =>
+                        notification.Message.Contains("動画", StringComparison.Ordinal) ||
+                        notification.Message.Contains("解析", StringComparison.Ordinal)),
+                    "The fake MP4 did not produce a preflight user notification.");
+
+                await window.HandleLaunchRequestAsync(new LaunchRequest
+                {
+                    FileArguments = [truncatedVideoPath],
+                });
+                Ensure(
+                    string.Equals(backend.CurrentPath, truncatedVideoPath, StringComparison.OrdinalIgnoreCase),
+                    "The truncated MP4 did not start in the product player.");
+                await WaitUntilAsync(
+                    () => window.HasPlaybackError,
+                    TimeSpan.FromSeconds(10),
+                    "The truncated MP4 did not enter the product runtime-error state.");
+
+                var terminalTimeMilliseconds = backend.TimeMilliseconds;
+                var declaredLengthMilliseconds = backend.LengthMilliseconds;
+                var overlay = (Border)window.FindName("PlaybackErrorOverlay");
+                var errorMessage = (TextBlock)window.FindName("PlaybackErrorMessageText");
+                var playButton = (Button)window.FindName("PlayPauseButton");
+                var notificationBorder = (Border)window.FindName("NotificationBorder");
+                var timelineText = (TextBlock)window.FindName("TimeText");
+                Ensure(
+                    overlay.Visibility == Visibility.Visible,
+                    "The approved in-video playback-error overlay was not visible.");
+                Ensure(!playButton.IsEnabled, "Playback remained enabled after a runtime error.");
+                Ensure(!seekSlider.IsEnabled, "Seeking remained enabled after a runtime error.");
+                Ensure(
+                    notificationBorder.Visibility == Visibility.Collapsed,
+                    "The runtime error duplicated the in-video error as a toast.");
+                Ensure(
+                    terminalTimeMilliseconds > 0 &&
+                    PlaybackCompletion.IsPrematureEnd(
+                        terminalTimeMilliseconds,
+                        declaredLengthMilliseconds),
+                    "The final playback time was not preserved as a premature end.");
+                Ensure(
+                    diagnosticLog.Events.Any(diagnosticEvent =>
+                        diagnosticEvent.EventName == "playback-ended-early"),
+                    "The premature end was not written to the diagnostic log.");
+                Ensure(playbackEndedCount == 0, "A premature end was also published as normal completion.");
+
+                validation = new
+                {
+                    fakeVideo = new
+                    {
+                        path = fakeVideoPath,
+                        preservedPath = fakePreservedPath,
+                        baselineTimeBeforeFake,
+                        baselineTimeAfterFake,
+                        notificationCount = notificationSink.Notifications.Count,
+                    },
+                    truncatedVideo = new
+                    {
+                        path = truncatedVideoPath,
+                        terminalTimeMilliseconds,
+                        declaredLengthMilliseconds,
+                        timelineText = timelineText.Text,
+                        errorMessage = errorMessage.Text,
+                        overlayVisible = overlay.Visibility == Visibility.Visible,
+                        playEnabled = playButton.IsEnabled,
+                        seekEnabled = seekSlider.IsEnabled,
+                        playbackEndedCount,
+                        diagnosticEvent = diagnosticLog.Events
+                            .First(diagnosticEvent => diagnosticEvent.EventName == "playback-ended-early")
+                            .Message,
+                    },
+                };
+                exitCode = 0;
+            }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine(exception);
+                foreach (var diagnosticEvent in diagnosticLog.Events)
+                {
+                    Console.Error.WriteLine(
+                        $"{diagnosticEvent.Severity} {diagnosticEvent.EventName}: " +
+                        $"{diagnosticEvent.Message} {diagnosticEvent.Exception}");
+                }
+            }
+            finally
+            {
+                window.Close();
+            }
+        };
+
+        application.Run(window);
+        var shutdownDiagnostics = backend.AudioDiagnostics;
+        if (shutdownDiagnostics.RenderThreadAlive || shutdownDiagnostics.Failed)
+        {
+            Console.Error.WriteLine(
+                $"Audio shutdown failed: threadAlive={shutdownDiagnostics.RenderThreadAlive}, " +
+                $"failed={shutdownDiagnostics.Failed}.");
+            return 1;
+        }
+
+        if (exitCode == 0)
+        {
+            var report = new
+            {
+                success = true,
+                validVideo = fullValidVideoPath,
+                validation,
+                audioDiagnostics = shutdownDiagnostics,
+            };
+            WriteReport(reportPath, report);
+            Console.WriteLine(JsonSerializer.Serialize(report));
+        }
+
+        return exitCode;
     }
 
     private static async Task AssertCanceledAsync(Task task, TimeSpan timeout)
@@ -2491,6 +2679,7 @@ internal static class Program
         resources["AppBackgroundBrush"] = new SolidColorBrush(Color.FromRgb(0x0C, 0x11, 0x19));
         resources["TextBrush"] = new SolidColorBrush(Color.FromRgb(0xF2, 0xF6, 0xFC));
         resources["MutedTextBrush"] = new SolidColorBrush(Color.FromRgb(0x9D, 0xAB, 0xC0));
+        resources["ErrorBrush"] = new SolidColorBrush(Color.FromRgb(0xFF, 0x6B, 0x79));
         resources["PanelBrush"] = new SolidColorBrush(Color.FromRgb(0x15, 0x1D, 0x29));
         resources["PanelRaisedBrush"] = new SolidColorBrush(Color.FromRgb(0x1C, 0x26, 0x34));
         resources["BorderBrush"] = new SolidColorBrush(Color.FromRgb(0x34, 0x41, 0x56));

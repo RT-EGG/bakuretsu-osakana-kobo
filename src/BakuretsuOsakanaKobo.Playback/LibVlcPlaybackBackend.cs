@@ -11,6 +11,10 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
     private int _volumePercent = PlaybackVolume.DefaultPercent;
     private bool _isMuted;
     private float _rate = PlaybackRate.Default;
+    private long _knownLengthMilliseconds;
+    private long _lastPlaybackTimeMilliseconds;
+    private int _preserveTerminalPosition;
+    private int _runtimeErrorReported;
     private bool _disposed;
 
     public LibVlcPlaybackBackend(Action<Exception>? callbackExceptionHandler = null)
@@ -72,7 +76,9 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         get
         {
             ThrowIfDisposed();
-            return Math.Max(0, MediaPlayer.Length);
+            return Math.Max(
+                Math.Max(0, MediaPlayer.Length),
+                Interlocked.Read(ref _knownLengthMilliseconds));
         }
     }
 
@@ -81,7 +87,14 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         get
         {
             ThrowIfDisposed();
-            return Math.Max(0, MediaPlayer.Time);
+            if (Volatile.Read(ref _preserveTerminalPosition) != 0)
+            {
+                return Math.Max(0, Interlocked.Read(ref _lastPlaybackTimeMilliseconds));
+            }
+
+            var currentTime = Math.Max(0, MediaPlayer.Time);
+            Interlocked.Exchange(ref _lastPlaybackTimeMilliseconds, currentTime);
+            return currentTime;
         }
     }
 
@@ -195,6 +208,11 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         var nextAudioState = initialState?.AudioState ?? previousAudioState;
         var nextAudioStateApplied = false;
         var nextAudioStateCommitted = false;
+        var previousLengthMilliseconds = Interlocked.Read(ref _knownLengthMilliseconds);
+        var previousTimeMilliseconds = Interlocked.Read(ref _lastPlaybackTimeMilliseconds);
+        var previousPreserveTerminalPosition = Volatile.Read(ref _preserveTerminalPosition);
+        var previousRuntimeErrorReported = Volatile.Read(ref _runtimeErrorReported);
+        var nextPlaybackStateApplied = false;
         try
         {
             nextMedia = new Media(_libVlc, new Uri(fullPath));
@@ -251,6 +269,19 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
             nextAudioStateApplied = true;
             ApplyVolumeState();
             _audioOutput.PrepareForPlayback();
+            var nextLengthMilliseconds = Math.Max(0, nextMedia.Duration);
+            var initialPosition = PlaybackPosition.ResolveInitialPosition(
+                initialState?.StartPositionMilliseconds,
+                nextLengthMilliseconds);
+            Interlocked.Exchange(ref _knownLengthMilliseconds, nextLengthMilliseconds);
+            Interlocked.Exchange(
+                ref _lastPlaybackTimeMilliseconds,
+                initialPosition is null
+                    ? 0
+                    : (long)Math.Round(initialPosition.Value * nextLengthMilliseconds));
+            Volatile.Write(ref _preserveTerminalPosition, 0);
+            Volatile.Write(ref _runtimeErrorReported, 0);
+            nextPlaybackStateApplied = true;
             if (!MediaPlayer.Play(nextMedia))
             {
                 RaiseError(new PlaybackErrorEventArgs(
@@ -276,9 +307,6 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
                 _rate = PlaybackRate.Default;
             }
 
-            var initialPosition = PlaybackPosition.ResolveInitialPosition(
-                initialState?.StartPositionMilliseconds,
-                Math.Max(0, nextMedia.Duration));
             if (initialPosition is not null)
             {
                 MediaPlayer.Position = (float)initialPosition.Value;
@@ -314,6 +342,14 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
                 _volumePercent = previousAudioState.VolumePercent;
                 _isMuted = previousAudioState.IsMuted;
                 ApplyVolumeState();
+            }
+
+            if (nextPlaybackStateApplied && !nextAudioStateCommitted)
+            {
+                Interlocked.Exchange(ref _knownLengthMilliseconds, previousLengthMilliseconds);
+                Interlocked.Exchange(ref _lastPlaybackTimeMilliseconds, previousTimeMilliseconds);
+                Volatile.Write(ref _preserveTerminalPosition, previousPreserveTerminalPosition);
+                Volatile.Write(ref _runtimeErrorReported, previousRuntimeErrorReported);
             }
 
             if (nextMedia is not null)
@@ -435,6 +471,7 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         MediaPlayer.Playing += OnStateChanged;
         MediaPlayer.Paused += OnStateChanged;
         MediaPlayer.Stopped += OnStateChanged;
+        MediaPlayer.TimeChanged += OnTimeChanged;
         MediaPlayer.EndReached += OnPlaybackEnded;
         MediaPlayer.EncounteredError += OnEncounteredError;
     }
@@ -444,20 +481,56 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         MediaPlayer.Playing -= OnStateChanged;
         MediaPlayer.Paused -= OnStateChanged;
         MediaPlayer.Stopped -= OnStateChanged;
+        MediaPlayer.TimeChanged -= OnTimeChanged;
         MediaPlayer.EndReached -= OnPlaybackEnded;
         MediaPlayer.EncounteredError -= OnEncounteredError;
     }
 
     private void OnStateChanged(object? sender, EventArgs eventArgs) => RaiseSafely(StateChanged, EventArgs.Empty);
 
+    private void OnTimeChanged(object? sender, MediaPlayerTimeChangedEventArgs eventArgs)
+    {
+        if (!_disposed && Volatile.Read(ref _preserveTerminalPosition) == 0)
+        {
+            Interlocked.Exchange(ref _lastPlaybackTimeMilliseconds, Math.Max(0, eventArgs.Time));
+        }
+    }
+
     private void OnPlaybackEnded(object? sender, EventArgs eventArgs)
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        var lengthMilliseconds = Math.Max(
+            ReadPlayerLengthSafely(),
+            Interlocked.Read(ref _knownLengthMilliseconds));
+        var playbackTimeMilliseconds = Math.Max(
+            ReadPlayerTimeSafely(),
+            Interlocked.Read(ref _lastPlaybackTimeMilliseconds));
+        if (PlaybackCompletion.IsPrematureEnd(playbackTimeMilliseconds, lengthMilliseconds))
+        {
+            ReportRuntimeError(new PlaybackErrorEventArgs(
+                "playback-ended-early",
+                "動画ファイルの破損により、再生を最後まで続けられませんでした。",
+                "別の動画を開くか、元のファイルを確認してください。",
+                $"Playback ended at {playbackTimeMilliseconds} ms before the declared " +
+                $"length of {lengthMilliseconds} ms.",
+                targetPath: CurrentPath),
+                playbackTimeMilliseconds);
+            return;
+        }
+
         RaiseSafely(StateChanged, EventArgs.Empty);
-        RaiseSafely(PlaybackEnded, EventArgs.Empty);
+        if (Volatile.Read(ref _runtimeErrorReported) == 0)
+        {
+            RaiseSafely(PlaybackEnded, EventArgs.Empty);
+        }
     }
 
     private void OnEncounteredError(object? sender, EventArgs eventArgs) =>
-        RaiseError(new PlaybackErrorEventArgs(
+        ReportRuntimeError(new PlaybackErrorEventArgs(
             "playback-native-error",
             "動画の再生中に問題が発生しました。",
             "別の動画を開くか、ファイルの状態を確認してください。",
@@ -472,6 +545,57 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
             exception.Message,
             exception,
             CurrentPath));
+
+    private void ReportRuntimeError(
+        PlaybackErrorEventArgs eventArgs,
+        long? playbackTimeMilliseconds = null)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (Interlocked.Exchange(ref _runtimeErrorReported, 1) != 0)
+        {
+            return;
+        }
+
+        var terminalTime = Math.Max(
+            0,
+            playbackTimeMilliseconds ?? Math.Max(
+                ReadPlayerTimeSafely(),
+                Interlocked.Read(ref _lastPlaybackTimeMilliseconds)));
+        Interlocked.Exchange(ref _lastPlaybackTimeMilliseconds, terminalTime);
+        Volatile.Write(ref _preserveTerminalPosition, 1);
+        RaiseSafely(StateChanged, EventArgs.Empty);
+        RaiseError(eventArgs);
+    }
+
+    private long ReadPlayerTimeSafely()
+    {
+        try
+        {
+            return Math.Max(0, MediaPlayer.Time);
+        }
+        catch (Exception exception)
+        {
+            ReportCallbackException(exception);
+            return Math.Max(0, Interlocked.Read(ref _lastPlaybackTimeMilliseconds));
+        }
+    }
+
+    private long ReadPlayerLengthSafely()
+    {
+        try
+        {
+            return Math.Max(0, MediaPlayer.Length);
+        }
+        catch (Exception exception)
+        {
+            ReportCallbackException(exception);
+            return Math.Max(0, Interlocked.Read(ref _knownLengthMilliseconds));
+        }
+    }
 
     private void RaiseError(PlaybackErrorEventArgs eventArgs) => RaiseSafely(ErrorOccurred, eventArgs);
 

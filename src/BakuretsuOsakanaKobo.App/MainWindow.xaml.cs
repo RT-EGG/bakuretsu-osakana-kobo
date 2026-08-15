@@ -41,6 +41,8 @@ public partial class MainWindow : Window
 
     internal ThumbnailGenerationRun? ThumbnailGenerationRun => _thumbnailGenerationRun;
 
+    internal bool HasPlaybackError => _hasPlaybackError;
+
     private readonly DispatcherTimer _playbackTimelineTimer;
     private readonly DispatcherTimer _videoProfileSaveTimer;
     private readonly DispatcherTimer _temporaryPlaybackRateTimer;
@@ -224,6 +226,16 @@ public partial class MainWindow : Window
     }
 
     private async void OpenVideoMenuItem_OnClick(object sender, RoutedEventArgs e)
+    {
+        await ShowOpenVideoDialogAsync();
+    }
+
+    private async void PlaybackErrorOpenFileButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        await ShowOpenVideoDialogAsync();
+    }
+
+    private async Task ShowOpenVideoDialogAsync()
     {
         if (_playbackBackend is null || _openTask is not null)
         {
@@ -911,6 +923,7 @@ public partial class MainWindow : Window
             {
                 opened = true;
                 _hasPlaybackError = false;
+                PlaybackErrorOverlay.Visibility = Visibility.Collapsed;
                 EmptyStatePanel.Visibility = Visibility.Collapsed;
                 Title = $"{Path.GetFileName(path)} - {ApplicationInfo.DisplayName}";
                 NotificationBorder.Visibility = Visibility.Collapsed;
@@ -1148,12 +1161,19 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (eventArgs.EventCode is "playback-native-error" or "playback-audio-output-error")
+        if (eventArgs.EventCode is
+            "playback-ended-early" or
+            "playback-native-error" or
+            "playback-audio-output-error")
         {
-            EndTemporaryPlaybackRateGesture();
-            _hasPlaybackError = true;
-            UpdateVolumeControls();
-            UpdatePlaybackRateControls();
+            ShowPlaybackError(eventArgs);
+            _errorReporter.ReportDiagnostic(
+                DiagnosticSeverity.Error,
+                eventArgs.EventCode,
+                eventArgs.TechnicalMessage,
+                eventArgs.Exception,
+                eventArgs.TargetPath);
+            return;
         }
 
         _errorReporter.Report(
@@ -1165,6 +1185,20 @@ public partial class MainWindow : Window
             eventArgs.TechnicalMessage,
             eventArgs.Exception,
             eventArgs.TargetPath);
+    }
+
+    private void ShowPlaybackError(PlaybackErrorEventArgs eventArgs)
+    {
+        EndTemporaryPlaybackRateGesture();
+        CloseSeekThumbnail();
+        _hasPlaybackError = true;
+        PlaybackErrorMessageText.Text = $"{eventArgs.UserMessage} {eventArgs.SuggestedAction}";
+        PlaybackErrorOverlay.Visibility = Visibility.Visible;
+        NotificationBorder.Visibility = Visibility.Collapsed;
+        UpdatePlaybackButton();
+        UpdatePlaybackTimeline();
+        UpdateVolumeControls();
+        UpdatePlaybackRateControls();
     }
 
     protected override void OnClosing(CancelEventArgs e)
@@ -1534,9 +1568,11 @@ public partial class MainWindow : Window
         var presentation = PlaybackButtonPresentation.From(
             _playbackBackend?.CurrentPath is not null,
             _playbackBackend?.IsPlaying == true);
-        PlayPauseButton.IsEnabled = presentation.IsEnabled && _openTask is null;
+        PlayPauseButton.IsEnabled = presentation.IsEnabled && _openTask is null && !_hasPlaybackError;
         PlayPauseButton.Content = presentation.Glyph;
-        PlayPauseButton.ToolTip = presentation.ToolTip;
+        PlayPauseButton.ToolTip = _hasPlaybackError
+            ? "再生エラーのため操作できません"
+            : presentation.ToolTip;
         AutomationProperties.SetName(PlayPauseButton, presentation.AccessibleName);
     }
 
@@ -1561,8 +1597,10 @@ public partial class MainWindow : Window
             backend?.TimeMilliseconds ?? 0,
             backend?.LengthMilliseconds ?? 0);
 
-        SeekSlider.IsEnabled = presentation.IsSeekEnabled;
-        SeekSlider.ToolTip = presentation.SeekToolTip;
+        SeekSlider.IsEnabled = presentation.IsSeekEnabled && !_hasPlaybackError;
+        SeekSlider.ToolTip = _hasPlaybackError
+            ? "再生エラーのためシークできません"
+            : presentation.SeekToolTip;
         if (!presentation.IsSeekEnabled)
         {
             CloseSeekThumbnail();

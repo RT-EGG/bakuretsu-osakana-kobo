@@ -2555,28 +2555,39 @@ public partial class MainWindow : Window
         }
 
         ThumbnailPreviewImage.Source = null;
+        ThumbnailLoadingText.Text = "サムネイルを準備中";
+        ThumbnailLoadingProgress.Visibility = Visibility.Visible;
         ThumbnailLoadingOverlay.Visibility = Visibility.Visible;
         run.RequestPriority(targetMilliseconds);
     }
 
     private void RefreshSeekThumbnail()
     {
-        if (_thumbnailGenerationRun is { Completion.IsCanceled: true } or { Completion.IsFaulted: true })
+        var run = _thumbnailGenerationRun;
+        ThumbnailFrame? frame = null;
+        var hasFrame = run is not null &&
+                       run.TryGet(_pendingThumbnailTargetMilliseconds, out frame);
+        var state = ThumbnailPreviewContent.Resolve(
+            SeekThumbnailPopup.IsOpen,
+            _pendingThumbnailTargetMilliseconds,
+            _pendingThumbnailGenerationId,
+            run?.GenerationId ?? 0,
+            hasFrame,
+            run?.Completion.IsCompleted == true);
+        if (state == ThumbnailPreviewContentState.Frame)
         {
-            CloseSeekThumbnail();
+            ShowThumbnailFrame(frame!);
             return;
         }
 
-        if (!SeekThumbnailPopup.IsOpen ||
-            _pendingThumbnailTargetMilliseconds < 0 ||
-            _thumbnailGenerationRun is not { } run ||
-            run.GenerationId != _pendingThumbnailGenerationId ||
-            !run.TryGet(_pendingThumbnailTargetMilliseconds, out var frame))
+        if (state == ThumbnailPreviewContentState.Unavailable)
         {
+            ThumbnailPreviewImage.Source = null;
+            ThumbnailLoadingText.Text = "サムネイルを表示できません";
+            ThumbnailLoadingProgress.Visibility = Visibility.Collapsed;
+            ThumbnailLoadingOverlay.Visibility = Visibility.Visible;
             return;
         }
-
-        ShowThumbnailFrame(frame!);
     }
 
     private void ShowThumbnailFrame(ThumbnailFrame frame)
@@ -2601,6 +2612,8 @@ public partial class MainWindow : Window
         _pendingThumbnailGenerationId = 0;
         _pendingThumbnailTargetMilliseconds = -1;
         ThumbnailPreviewImage.Source = null;
+        ThumbnailLoadingText.Text = "サムネイルを準備中";
+        ThumbnailLoadingProgress.Visibility = Visibility.Visible;
     }
 
     private void UpdateStartPositionMarker()

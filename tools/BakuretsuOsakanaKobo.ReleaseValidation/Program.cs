@@ -2678,9 +2678,15 @@ internal static class Program
                 "The product timeline did not become ready.");
             var timelineReadyMilliseconds = ready.Max();
             await WaitUntilAsync(
-                () => backend.AudioDiagnostics is { CallbackCount: > 0, OutputStarted: true, Failed: false },
+                () => backend.AudioDiagnostics is
+                {
+                    CallbackCount: > 0,
+                    OutputStarted: true,
+                    SessionNormalized: true,
+                    Failed: false,
+                },
                 TimeSpan.FromSeconds(5),
-                "The product PCM/WASAPI path did not become ready.");
+                "The product PCM/WASAPI path or application audio session did not become ready.");
             return new OpenMetrics(timelineReadyMilliseconds, clock.Elapsed.TotalMilliseconds);
         }
         finally

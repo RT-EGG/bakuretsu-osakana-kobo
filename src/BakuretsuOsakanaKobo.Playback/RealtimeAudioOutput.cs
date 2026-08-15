@@ -39,6 +39,11 @@ internal sealed class RealtimeAudioOutput : IDisposable
     private long _completedDrainCount;
     private long _flushedBytes;
     private long _discardedLimiterFrames;
+    private long _pauseCallbackCount;
+    private long _resumeCallbackCount;
+    private bool _sessionNormalized;
+    private float _sessionVolumeBeforeNormalization = 1;
+    private bool _sessionMutedBeforeNormalization;
     private long _failureReported;
     private long _outputStarted;
 
@@ -107,11 +112,19 @@ internal sealed class RealtimeAudioOutput : IDisposable
                     Interlocked.Read(ref _completedDrainCount),
                     Interlocked.Read(ref _flushedBytes),
                     Interlocked.Read(ref _discardedLimiterFrames),
+                    Interlocked.Read(ref _pauseCallbackCount),
+                    Interlocked.Read(ref _resumeCallbackCount),
                     _processor.PendingFrames,
                     _processor.NonFiniteInputSamples,
                     _processor.NonFiniteOutputSamples,
                     _processor.Peak,
                     _processor.OverRangeSamples,
+                    _isPaused,
+                    _isRebuffering,
+                    _buffer.BufferedBytes,
+                    _sessionNormalized,
+                    _sessionVolumeBeforeNormalization,
+                    _sessionMutedBeforeNormalization,
                     Interlocked.Read(ref _outputStarted) != 0,
                     Interlocked.Read(ref _failureReported) != 0,
                     _renderThread.IsAlive);
@@ -220,6 +233,11 @@ internal sealed class RealtimeAudioOutput : IDisposable
 
                 var processed = _processor.Process(pcm16);
                 AddToBuffer(processed);
+                // LibVLC can begin a new playback sequence with play callbacks without a
+                // matching resume callback for the pause notification from the old sequence.
+                // Receiving samples that are ready for the output is authoritative evidence
+                // that rendering may continue.
+                _isPaused = false;
                 _isDraining = false;
             }
 
@@ -237,6 +255,7 @@ internal sealed class RealtimeAudioOutput : IDisposable
     {
         try
         {
+            Interlocked.Increment(ref _pauseCallbackCount);
             lock (_sync)
             {
                 _isPaused = true;
@@ -254,6 +273,7 @@ internal sealed class RealtimeAudioOutput : IDisposable
     {
         try
         {
+            Interlocked.Increment(ref _resumeCallbackCount);
             lock (_sync)
             {
                 _isPaused = false;
@@ -353,6 +373,7 @@ internal sealed class RealtimeAudioOutput : IDisposable
                     output = new WasapiOut(endpoint, AudioClientShareMode.Shared, true, 50);
                     output.PlaybackStopped += Output_OnPlaybackStopped;
                     output.Init(new LockedPaddedWaveProvider(this));
+                    NormalizeApplicationAudioSession(endpoint);
                     Interlocked.Exchange(ref _outputStarted, 1);
                 }
 
@@ -415,6 +436,33 @@ internal sealed class RealtimeAudioOutput : IDisposable
         if (eventArgs.Exception is not null && !_shutdown.IsCancellationRequested)
         {
             ReportFailure(new InvalidOperationException("WASAPI playback stopped unexpectedly.", eventArgs.Exception));
+        }
+    }
+
+    private void NormalizeApplicationAudioSession(MMDevice endpoint)
+    {
+        var sessionManager = endpoint.AudioSessionManager;
+        try
+        {
+            using var sessionVolume = sessionManager.SimpleAudioVolume;
+            var volumeBeforeNormalization = sessionVolume.Volume;
+            var mutedBeforeNormalization = sessionVolume.Mute;
+
+            // Volume and mute are implemented by the application's PCM processor. Keep the
+            // process-default WASAPI session neutral so a stale Windows per-app mixer state
+            // cannot contradict the in-app controls and silently discard the processed audio.
+            sessionVolume.Volume = 1;
+            sessionVolume.Mute = false;
+            lock (_sync)
+            {
+                _sessionVolumeBeforeNormalization = volumeBeforeNormalization;
+                _sessionMutedBeforeNormalization = mutedBeforeNormalization;
+                _sessionNormalized = true;
+            }
+        }
+        finally
+        {
+            sessionManager.Dispose();
         }
     }
 
@@ -527,11 +575,19 @@ internal readonly record struct RealtimeAudioDiagnostics(
     long CompletedDrainCount,
     long FlushedBytes,
     long DiscardedLimiterFrames,
+    long PauseCallbackCount,
+    long ResumeCallbackCount,
     int PendingLimiterFrames,
     long NonFiniteInputSamples,
     long NonFiniteOutputSamples,
     double Peak,
     long OverRangeSamples,
+    bool IsPaused,
+    bool IsRebuffering,
+    int BufferedBytes,
+    bool SessionNormalized,
+    float SessionVolumeBeforeNormalization,
+    bool SessionMutedBeforeNormalization,
     bool OutputStarted,
     bool Failed,
     bool RenderThreadAlive);

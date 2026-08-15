@@ -351,11 +351,13 @@
                             Grid.Row="0"
                             Background="#D90B1119">
                         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                            <ProgressBar Width="112"
+                            <ProgressBar x:Name="ThumbnailLoadingProgress"
+                                         Width="112"
                                          Height="3"
                                          IsIndeterminate="True"
                                          Foreground="{StaticResource PrimaryBrush}" />
-                            <TextBlock Margin="0,9,0,0"
+                            <TextBlock x:Name="ThumbnailLoadingText"
+                                       Margin="0,9,0,0"
                                        FontSize="11"
                                        Foreground="{StaticResource MutedTextBrush}"
                                        Text="サムネイルを準備中" />

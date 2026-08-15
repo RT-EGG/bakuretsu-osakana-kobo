@@ -4,6 +4,7 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\BakuretsuOsakanaKobo.ico</ApplicationIcon>
     <AssemblyName>BakuretsuOsakanaKobo</AssemblyName>
     <RootNamespace>BakuretsuOsakanaKobo</RootNamespace>
     <PlatformTarget>x64</PlatformTarget>
@@ -18,6 +19,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Resource Include="Assets\BakuretsuOsakanaKobo.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="LibVLCSharp.WPF" Version="3.10.0" />
     <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
   </ItemGroup>
@@ -30,6 +35,7 @@
   <ItemGroup>
     <None Include="../../release-assets/THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../release-assets/licenses/LGPL-2.1.txt" Link="licenses/LGPL-2.1.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../release-assets/licenses/NAudio-MIT.txt" Link="licenses/NAudio-MIT.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

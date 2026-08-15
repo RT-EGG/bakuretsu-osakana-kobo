@@ -7,13 +7,15 @@ This distribution uses the following unmodified third-party components.
 | LibVLCSharp | 3.10.0 | LGPL-2.1 | commit `59d70e96026229e7c232ce5074ecefbf6f8959b6` |
 | LibVLCSharp.WPF | 3.10.0 | LGPL-2.1 | same LibVLCSharp commit |
 | VideoLAN.LibVLC.Windows | 3.0.23.1 | LGPL-2.1-or-later package declaration | see `CORRESPONDING-SOURCE.md` and the separate source archive in the same GitHub Release |
+| NAudio.Core / NAudio.Wasapi | 2.3.0 | MIT | see `licenses/NAudio-MIT.txt` |
 | .NET application host/runtime components | build-dependent | MIT and third-party licenses | see `licenses/DOTNET-LICENSE.txt` and `DOTNET-THIRD-PARTY-NOTICES.txt` |
 
 Copyright remains with VideoLAN, Microsoft, and the respective contributors.
 The application does not modify the LGPL libraries. They remain separate DLLs and may be replaced with
 interface-compatible builds. Reverse engineering for debugging modifications to those libraries is not prohibited.
 
-The complete LGPL 2.1 text is included at `licenses/LGPL-2.1.txt`.
+The complete LGPL 2.1 text is included at `licenses/LGPL-2.1.txt`. The NAudio MIT notice is included at
+`licenses/NAudio-MIT.txt`.
 The exact package versions, file hashes, excluded plug-ins, and source-bundle filename are recorded in
 `release-manifest.json`. The resolved direct and transitive NuGet dependency inventory is recorded in
 `dotnet-packages.json`.

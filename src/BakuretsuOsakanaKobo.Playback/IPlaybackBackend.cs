@@ -6,6 +6,8 @@ public interface IPlaybackBackend : IDisposable
 
     event EventHandler? StateChanged;
 
+    event EventHandler? PlaybackEnded;
+
     bool IsPlaying { get; }
 
     bool IsSeekable { get; }
@@ -14,9 +16,20 @@ public interface IPlaybackBackend : IDisposable
 
     long TimeMilliseconds { get; }
 
+    int VolumePercent { get; }
+
+    bool IsMuted { get; }
+
+    float Rate { get; }
+
+    double VideoDisplayAspectRatio { get; }
+
     string? CurrentPath { get; }
 
-    Task<bool> OpenAndPlayAsync(string path, CancellationToken cancellationToken = default);
+    Task<bool> OpenAndPlayAsync(
+        string path,
+        PlaybackInitialState? initialState = null,
+        CancellationToken cancellationToken = default);
 
     void Play();
 
@@ -25,4 +38,10 @@ public interface IPlaybackBackend : IDisposable
     void Stop();
 
     void Seek(double normalizedPosition);
+
+    void SetVolumePercent(int volumePercent);
+
+    void SetMuted(bool isMuted);
+
+    bool TrySetRate(float rate);
 }

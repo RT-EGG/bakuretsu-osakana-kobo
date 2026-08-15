@@ -1,11 +1,18 @@
 using System.Diagnostics;
 using System.ComponentModel;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using BakuretsuOsakanaKobo.Infrastructure.Errors;
+using BakuretsuOsakanaKobo.Infrastructure.Diagnostics;
 using BakuretsuOsakanaKobo.Infrastructure.Persistence;
 using BakuretsuOsakanaKobo.Playback;
 using Microsoft.Win32;
@@ -15,20 +22,76 @@ namespace BakuretsuOsakanaKobo;
 public partial class MainWindow : Window
 {
     private static readonly TimeSpan PlaybackTimelineRefreshInterval = TimeSpan.FromMilliseconds(200);
+    private static readonly TimeSpan TemporaryPlaybackRateReleasePollInterval = TimeSpan.FromMilliseconds(25);
+    private const double ThumbnailPreviewGap = 8;
+    private const int WindowMessageActivateApplication = 0x001C;
+    internal static readonly TimeSpan VideoProfileSaveDelay = TimeSpan.FromSeconds(3);
+
+    internal bool IsTemporaryPlaybackRatePending => _temporaryPlaybackRateGesture.IsPending;
+
+    internal bool IsTemporaryPlaybackRateActive => _temporaryPlaybackRateGesture.IsActive;
+
+    internal bool IsFullscreen => _isFullscreen;
+
+    internal double ThumbnailIntervalPercent => _thumbnailIntervalPercent;
+
+    internal double ThumbnailPreviewWidthPercent => _thumbnailPreviewWidthPercent;
+
+    internal ThumbnailGenerationSession? ThumbnailSession => _thumbnailSession;
+
+    internal ThumbnailGenerationRun? ThumbnailGenerationRun => _thumbnailGenerationRun;
+
+    internal bool HasPlaybackError => _hasPlaybackError;
 
     private readonly DispatcherTimer _playbackTimelineTimer;
+    private readonly DispatcherTimer _videoProfileSaveTimer;
+    private readonly DispatcherTimer _temporaryPlaybackRateTimer;
+    private readonly DispatcherTimer _temporaryPlaybackRateReleaseTimer;
+    private readonly DispatcherTimer _fullscreenControlsTimer;
+    private readonly TemporaryPlaybackRateGesture _temporaryPlaybackRateGesture = new();
+    private readonly FullscreenControlsState _fullscreenControlsState = new();
     private PortableDataPaths? _paths;
     private ErrorReporter? _errorReporter;
     private IPlaybackBackend? _playbackBackend;
+    private VideoProfileRepository? _videoProfiles;
+    private RecentFileRepository? _recentFiles;
+    private PlaylistRepository? _playlist;
+    private AppSettingsRepository? _appSettings;
+    private IThumbnailGenerationService? _thumbnailGenerationService;
+    private PlaylistWindow? _playlistWindow;
     private CancellationTokenSource? _openCancellation;
     private Task? _openTask;
     private bool _isOpeningVideo;
     private bool _isUpdatingSeekSlider;
+    private bool _isUpdatingVolumeSlider;
     private bool _isSeekDragging;
+    private bool _hasPlaybackError;
+    private long _videoProfileRevision;
+    private long _savedVideoProfileRevision;
+    private Task<JsonSaveResult>? _videoProfileSaveTask;
+    private Task? _recentFileMutationTask;
+    private Task? _playlistMutationTask;
+    private Task? _playlistAdvanceTask;
+    private Task<JsonSaveResult>? _appSettingsMutationTask;
+    private double _thumbnailIntervalPercent = ThumbnailGenerationInterval.DefaultPercent;
+    private double _thumbnailPreviewWidthPercent = ThumbnailPreviewSize.DefaultPercent;
+    private ThumbnailGenerationSession? _thumbnailSession;
+    private ThumbnailGenerationRun? _thumbnailGenerationRun;
+    private Task? _thumbnailStopTask;
+    private long _pendingThumbnailGenerationId;
+    private long _pendingThumbnailTargetMilliseconds = -1;
+    private int? _playlistCurrentIndex;
+    private readonly HashSet<int> _playlistLoadErrorIndices = [];
+    private int _isOpeningPlaylistCandidate;
     private DateTime _seekPresentationHoldUntilUtc;
     private bool _closeRequested;
     private bool _allowClose;
     private bool _disposed;
+    private bool _isFullscreen;
+    private WindowState _windowStateBeforeFullscreen;
+    private WindowStyle _windowStyleBeforeFullscreen;
+    private ResizeMode _resizeModeBeforeFullscreen;
+    private HwndSource? _windowSource;
 
     public MainWindow()
     {
@@ -38,6 +101,26 @@ public partial class MainWindow : Window
             Interval = PlaybackTimelineRefreshInterval,
         };
         _playbackTimelineTimer.Tick += PlaybackTimelineTimer_OnTick;
+        _videoProfileSaveTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+        {
+            Interval = VideoProfileSaveDelay,
+        };
+        _videoProfileSaveTimer.Tick += VideoProfileSaveTimer_OnTick;
+        _temporaryPlaybackRateTimer = new DispatcherTimer(DispatcherPriority.Input, Dispatcher)
+        {
+            Interval = TemporaryPlaybackRateGesture.HoldDuration,
+        };
+        _temporaryPlaybackRateTimer.Tick += TemporaryPlaybackRateTimer_OnTick;
+        _temporaryPlaybackRateReleaseTimer = new DispatcherTimer(DispatcherPriority.Input, Dispatcher)
+        {
+            Interval = TemporaryPlaybackRateReleasePollInterval,
+        };
+        _temporaryPlaybackRateReleaseTimer.Tick += TemporaryPlaybackRateReleaseTimer_OnTick;
+        _fullscreenControlsTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+        {
+            Interval = FullscreenControlsState.AutoHideDelay,
+        };
+        _fullscreenControlsTimer.Tick += FullscreenControlsTimer_OnTick;
         SeekSlider.AddHandler(Thumb.DragStartedEvent, new DragStartedEventHandler(SeekSlider_OnDragStarted));
         SeekSlider.AddHandler(Thumb.DragCompletedEvent, new DragCompletedEventHandler(SeekSlider_OnDragCompleted));
     }
@@ -45,12 +128,29 @@ public partial class MainWindow : Window
     internal void ConfigureServices(
         PortableDataPaths paths,
         ErrorReporter errorReporter,
-        IPlaybackBackend? playbackBackend)
+        IPlaybackBackend? playbackBackend,
+        VideoProfileRepository? videoProfiles = null,
+        RecentFileRepository? recentFiles = null,
+        PlaylistRepository? playlist = null,
+        AppSettingsRepository? appSettings = null,
+        IThumbnailGenerationService? thumbnailGenerationService = null)
     {
         _paths = paths;
         _errorReporter = errorReporter;
         _playbackBackend = playbackBackend;
+        _videoProfiles = videoProfiles;
+        _recentFiles = recentFiles;
+        _playlist = playlist;
+        _appSettings = appSettings;
+        _thumbnailGenerationService = thumbnailGenerationService;
+        var settingsSnapshot = appSettings?.GetSnapshot();
+        _thumbnailIntervalPercent = settingsSnapshot?.ThumbnailIntervalPercent ??
+                                    ThumbnailGenerationInterval.DefaultPercent;
+        _thumbnailPreviewWidthPercent = settingsSnapshot?.ThumbnailPreviewWidthPercent ??
+                                        ThumbnailPreviewSize.DefaultPercent;
         OpenVideoMenuItem.IsEnabled = playbackBackend is not null;
+        ThumbnailSettingsMenuItem.IsEnabled = appSettings is not null;
+        RebuildRecentFilesMenu();
 
         if (playbackBackend is LibVlcPlaybackBackend libVlcBackend)
         {
@@ -61,18 +161,42 @@ public partial class MainWindow : Window
         {
             playbackBackend.ErrorOccurred += PlaybackBackend_OnErrorOccurred;
             playbackBackend.StateChanged += PlaybackBackend_OnStateChanged;
+            playbackBackend.PlaybackEnded += PlaybackBackend_OnPlaybackEnded;
             _playbackTimelineTimer.Start();
+        }
+
+        if (thumbnailGenerationService is not null)
+        {
+            thumbnailGenerationService.GenerationFailed += ThumbnailGenerationService_OnGenerationFailed;
         }
 
         UpdatePlaybackButton();
         UpdatePlaybackTimeline();
+        UpdateVolumeControls();
+        UpdatePlaybackRateControls();
     }
 
     internal void ShowNotification(UserNotification notification)
     {
+        (NotificationBorder.Background, NotificationBorder.BorderBrush) = notification.Severity switch
+        {
+            UserNotificationSeverity.Information =>
+                (new SolidColorBrush(Color.FromRgb(0x18, 0x2A, 0x38)), new SolidColorBrush(Color.FromRgb(0x41, 0x76, 0x9B))),
+            UserNotificationSeverity.Warning =>
+                (new SolidColorBrush(Color.FromRgb(0x2B, 0x21, 0x15)), new SolidColorBrush(Color.FromRgb(0x9A, 0x6A, 0x2D))),
+            _ =>
+                (new SolidColorBrush(Color.FromRgb(0x2B, 0x20, 0x26)), new SolidColorBrush(Color.FromRgb(0xFF, 0x6B, 0x79))),
+        };
         NotificationMessageText.Text = notification.Message;
         NotificationActionText.Text = notification.SuggestedAction;
         NotificationBorder.Visibility = Visibility.Visible;
+    }
+
+    protected override void OnSourceInitialized(EventArgs eventArgs)
+    {
+        base.OnSourceInitialized(eventArgs);
+        _windowSource = (HwndSource?)PresentationSource.FromVisual(this);
+        _windowSource?.AddHook(WindowMessageHook);
     }
 
     private void OpenDataFolderMenuItem_OnClick(object sender, RoutedEventArgs e)
@@ -107,6 +231,16 @@ public partial class MainWindow : Window
 
     private async void OpenVideoMenuItem_OnClick(object sender, RoutedEventArgs e)
     {
+        await ShowOpenVideoDialogAsync();
+    }
+
+    private async void PlaybackErrorOpenFileButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        await ShowOpenVideoDialogAsync();
+    }
+
+    private async Task ShowOpenVideoDialogAsync()
+    {
         if (_playbackBackend is null || _openTask is not null)
         {
             return;
@@ -125,33 +259,657 @@ public partial class MainWindow : Window
             return;
         }
 
-        _isOpeningVideo = true;
-        UpdatePlaybackButton();
-        UpdatePlaybackTimeline();
-        _openTask = OpenVideoAsync(dialog.FileName);
+        await OpenVideoFromUserRequestAsync(dialog.FileName);
+    }
+
+    private async void RecentFilesMenuItem_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        if (eventArgs.OriginalSource is not MenuItem menuItem || _closeRequested)
+        {
+            return;
+        }
+
+        switch (menuItem.Tag)
+        {
+            case OpenRecentFileAction openAction:
+                eventArgs.Handled = true;
+                await OpenVideoFromUserRequestAsync(openAction.Path);
+                if (!_closeRequested)
+                {
+                    RebuildRecentFilesMenu();
+                }
+                break;
+            case RemoveRecentFileAction removeAction:
+                eventArgs.Handled = true;
+                await RunRecentFileMutationAsync(
+                    repository => repository.RemoveAsync(removeAction.Path));
+                break;
+            case RemoveAllMissingRecentFilesAction:
+                eventArgs.Handled = true;
+                await RunRecentFileMutationAsync(repository => repository.RemoveMissingAsync());
+                break;
+            case ClearRecentFilesAction:
+                eventArgs.Handled = true;
+                await RunRecentFileMutationAsync(repository => repository.ClearAsync());
+                break;
+        }
+    }
+
+    private async void ThumbnailSettingsMenuItem_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        var appSettings = _appSettings;
+        if (appSettings is null || _appSettingsMutationTask is not null || _closeRequested)
+        {
+            return;
+        }
+
+        var dialog = new ThumbnailSettingsWindow(
+            _thumbnailIntervalPercent,
+            _thumbnailPreviewWidthPercent)
+        {
+            Owner = this,
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        ThumbnailSettingsMenuItem.IsEnabled = false;
+        Task<JsonSaveResult> mutationTask;
         try
         {
-            await _openTask;
+            mutationTask = appSettings.SetThumbnailSettingsAsync(
+                dialog.SelectedIntervalPercent,
+                dialog.SelectedPreviewWidthPercent);
+            var snapshot = appSettings.GetSnapshot();
+            _thumbnailIntervalPercent = snapshot.ThumbnailIntervalPercent;
+            _thumbnailPreviewWidthPercent = snapshot.ThumbnailPreviewWidthPercent;
+            CloseSeekThumbnail();
+        }
+        catch (Exception exception)
+        {
+            ReportAppSettingsSaveFailure(exception, appSettings.FilePath);
+            ThumbnailSettingsMenuItem.IsEnabled = true;
+            return;
+        }
+
+        _appSettingsMutationTask = mutationTask;
+        try
+        {
+            var result = await mutationTask;
+            if (result.Success)
+            {
+                ShowNotification(new UserNotification(
+                    UserNotificationSeverity.Information,
+                    $"生成間隔を {_thumbnailIntervalPercent:0.00}%、プレビュー幅を {_thumbnailPreviewWidthPercent:0}% に変更しました。",
+                    "生成間隔は次の動画から、プレビュー幅は現在の動画から適用します。"));
+            }
+            else
+            {
+                ReportAppSettingsSaveFailure(
+                    result.Exception ?? new IOException(result.ErrorMessage),
+                    appSettings.FilePath);
+            }
+        }
+        catch (Exception exception)
+        {
+            var snapshot = appSettings.GetSnapshot();
+            _thumbnailIntervalPercent = snapshot.ThumbnailIntervalPercent;
+            _thumbnailPreviewWidthPercent = snapshot.ThumbnailPreviewWidthPercent;
+            ReportAppSettingsSaveFailure(exception, appSettings.FilePath);
         }
         finally
         {
-            _openTask = null;
+            if (ReferenceEquals(_appSettingsMutationTask, mutationTask))
+            {
+                _appSettingsMutationTask = null;
+            }
+
+            if (!_closeRequested)
+            {
+                ThumbnailSettingsMenuItem.IsEnabled = true;
+            }
+        }
+    }
+
+    private void PlaylistMenuItem_OnCheckedChanged(object sender, RoutedEventArgs eventArgs)
+    {
+        if (PlaylistMenuItem.IsChecked)
+        {
+            ShowPlaylistWindow();
+            return;
+        }
+
+        _playlistWindow?.Close();
+    }
+
+    private void ShowPlaylistWindow()
+    {
+        if (_playlistWindow is not null)
+        {
+            _playlistWindow.Activate();
+            return;
+        }
+
+        var snapshot = _playlist?.GetSnapshot() ?? new PlaylistSnapshot([], false);
+        var playlistWindow = new PlaylistWindow(
+            snapshot.Entries,
+            snapshot.Loop,
+            canPersist: _playlist is not null && _playlistMutationTask is null,
+            currentMediaPath: _playbackBackend?.CurrentPath)
+        {
+            Owner = this,
+        };
+        playlistWindow.LoopChanged += PlaylistWindow_OnLoopChanged;
+        playlistWindow.EntriesAddRequested += PlaylistWindow_OnEntriesAddRequested;
+        playlistWindow.EntriesRemoveRequested += PlaylistWindow_OnEntriesRemoveRequested;
+        playlistWindow.EntryMoveRequested += PlaylistWindow_OnEntryMoveRequested;
+        playlistWindow.PlayRequested += PlaylistWindow_OnPlayRequested;
+        playlistWindow.Closed += PlaylistWindow_OnClosed;
+        _playlistWindow = playlistWindow;
+        playlistWindow.Show();
+        playlistWindow.UpdatePlaybackState(_playlistCurrentIndex, _playlistLoadErrorIndices);
+        playlistWindow.SetPlaybackRequestBusy(_playlistAdvanceTask is not null);
+    }
+
+    private async void PlaylistWindow_OnLoopChanged(
+        object? sender,
+        PlaylistLoopChangedEventArgs eventArgs)
+    {
+        var playlist = _playlist;
+        var playlistWindow = sender as PlaylistWindow;
+        if (playlist is null || _closeRequested)
+        {
+            if (playlistWindow is not null)
+            {
+                playlistWindow.CompletePersistence(playlist?.GetSnapshot().Entries ?? []);
+            }
+            return;
+        }
+
+        if (_playlistMutationTask is not null)
+        {
+            return;
+        }
+
+        Task<JsonSaveResult> mutationTask;
+        try
+        {
+            mutationTask = playlist.SetLoopAsync(eventArgs.Loop);
+        }
+        catch (Exception exception)
+        {
+            ReportPlaylistSaveFailure(exception, playlist.FilePath);
+            playlistWindow?.CompletePersistence(
+                playlist.GetSnapshot().Entries,
+                enablePersistence: true);
+            return;
+        }
+
+        _playlistMutationTask = mutationTask;
+        try
+        {
+            var result = await mutationTask;
+            if (!result.Success)
+            {
+                ReportPlaylistSaveFailure(
+                    result.Exception ?? new IOException(result.ErrorMessage),
+                    playlist.FilePath);
+            }
+        }
+        catch (Exception exception)
+        {
+            ReportPlaylistSaveFailure(exception, playlist.FilePath);
+        }
+        finally
+        {
+            if (ReferenceEquals(_playlistMutationTask, mutationTask))
+            {
+                _playlistMutationTask = null;
+            }
+
+            if (!_closeRequested)
+            {
+                var entries = playlist.GetSnapshot().Entries;
+                playlistWindow?.CompletePersistence(entries, enablePersistence: true);
+                if (_playlistWindow is { } activeWindow &&
+                    !ReferenceEquals(activeWindow, playlistWindow))
+                {
+                    activeWindow.CompletePersistence(entries, enablePersistence: true);
+                }
+            }
+        }
+    }
+
+    private async void PlaylistWindow_OnEntriesAddRequested(
+        object? sender,
+        PlaylistEntriesAddRequestedEventArgs eventArgs)
+    {
+        var playlist = _playlist;
+        var playlistWindow = sender as PlaylistWindow;
+        if (playlist is null || _closeRequested)
+        {
+            playlistWindow?.CompletePersistence(playlist?.GetSnapshot().Entries ?? []);
+            return;
+        }
+
+        if (_playlistMutationTask is not null)
+        {
+            return;
+        }
+
+        Task<JsonSaveResult> mutationTask;
+        try
+        {
+            mutationTask = playlist.AddEntriesAsync(eventArgs.Paths);
+        }
+        catch (Exception exception)
+        {
+            ReportPlaylistSaveFailure(exception, playlist.FilePath);
+            playlistWindow?.CompletePersistence(
+                playlist.GetSnapshot().Entries,
+                enablePersistence: true);
+            return;
+        }
+
+        _playlistMutationTask = mutationTask;
+        try
+        {
+            var result = await mutationTask;
+            if (!result.Success)
+            {
+                ReportPlaylistSaveFailure(
+                    result.Exception ?? new IOException(result.ErrorMessage),
+                    playlist.FilePath);
+            }
+        }
+        catch (Exception exception)
+        {
+            ReportPlaylistSaveFailure(exception, playlist.FilePath);
+        }
+        finally
+        {
+            if (ReferenceEquals(_playlistMutationTask, mutationTask))
+            {
+                _playlistMutationTask = null;
+            }
+
+            if (!_closeRequested)
+            {
+                var entries = playlist.GetSnapshot().Entries;
+                playlistWindow?.CompletePersistence(
+                    entries,
+                    eventArgs.Paths.Count,
+                    eventArgs.RejectedCount,
+                    enablePersistence: true);
+                if (_playlistWindow is { } activeWindow &&
+                    !ReferenceEquals(activeWindow, playlistWindow))
+                {
+                    activeWindow.CompletePersistence(entries, enablePersistence: true);
+                }
+            }
+        }
+    }
+
+    private async void PlaylistWindow_OnEntriesRemoveRequested(
+        object? sender,
+        PlaylistEntriesRemoveRequestedEventArgs eventArgs)
+    {
+        await PersistPlaylistMutationAsync(
+            sender as PlaylistWindow,
+            playlist => playlist.RemoveAtIndicesAsync(eventArgs.Indices),
+            $"{eventArgs.Indices.Count}件をプレイリストから削除しました。元の動画ファイルは削除していません。",
+            () => RemapPlaylistPlaybackAfterRemoval(eventArgs.Indices));
+    }
+
+    private async void PlaylistWindow_OnEntryMoveRequested(
+        object? sender,
+        PlaylistEntryMoveRequestedEventArgs eventArgs)
+    {
+        await PersistPlaylistMutationAsync(
+            sender as PlaylistWindow,
+            playlist => playlist.MoveToInsertionIndexAsync(
+                eventArgs.SourceIndex,
+                eventArgs.InsertionIndex),
+            "再生順を変更しました。",
+            () => RemapPlaylistPlaybackAfterMove(
+                eventArgs.SourceIndex,
+                eventArgs.InsertionIndex));
+    }
+
+    private void PlaylistWindow_OnPlayRequested(
+        object? sender,
+        PlaylistPlayRequestedEventArgs eventArgs) =>
+        QueuePlaylistPlayback(eventArgs.StartIndex, isNewSession: true);
+
+    private void QueuePlaylistPlayback(int startIndex, bool isNewSession)
+    {
+        if (_playlistAdvanceTask is not null || _openTask is not null ||
+            _playlistMutationTask is not null ||
+            _playlist is null || _playbackBackend is null || _closeRequested)
+        {
+            return;
+        }
+
+        var task = PlayPlaylistFromIndexAsync(startIndex, isNewSession);
+        _playlistAdvanceTask = task;
+        _ = ObservePlaylistAdvanceAsync(task);
+    }
+
+    private async Task ObservePlaylistAdvanceAsync(Task task)
+    {
+        try
+        {
+            await task;
+        }
+        catch (Exception exception)
+        {
+            _errorReporter?.Report(
+                new UserNotification(
+                    UserNotificationSeverity.Error,
+                    "プレイリストの再生を続行できませんでした。",
+                    "プレイリストを確認して、もう一度再生してください。"),
+                "playlist-advance-unexpected-failure",
+                exception.Message,
+                exception);
+        }
+        finally
+        {
+            if (ReferenceEquals(_playlistAdvanceTask, task))
+            {
+                _playlistAdvanceTask = null;
+            }
+
+            if (!_closeRequested)
+            {
+                _playlistWindow?.SetPlaybackRequestBusy(false);
+            }
+        }
+    }
+
+    private async Task PlayPlaylistFromIndexAsync(int startIndex, bool isNewSession)
+    {
+        await Dispatcher.Yield(DispatcherPriority.Background);
+        _playlistWindow?.SetPlaybackRequestBusy(true);
+        var playlist = _playlist;
+        if (playlist is null)
+        {
+            return;
+        }
+
+        var snapshot = playlist.GetSnapshot();
+        var entries = snapshot.Entries;
+        if (startIndex < 0 || startIndex > entries.Count)
+        {
+            return;
+        }
+
+        if (isNewSession)
+        {
+            _playlistCurrentIndex = null;
+            _playlistLoadErrorIndices.Clear();
+            UpdatePlaylistPlaybackPresentation();
+        }
+
+        var candidates = PlaylistPlaybackSequence.GetExistingCandidateIndices(
+            entries,
+            startIndex,
+            wrapToStart: !isNewSession && snapshot.Loop,
+            File.Exists);
+        foreach (var candidateIndex in candidates)
+        {
+            if (_closeRequested)
+            {
+                return;
+            }
+
+            Interlocked.Exchange(ref _isOpeningPlaylistCandidate, 1);
+            bool opened;
+            try
+            {
+                opened = await OpenVideoFromPlaylistAsync(entries[candidateIndex]);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _isOpeningPlaylistCandidate, 0);
+            }
+
+            if (opened)
+            {
+                _playlistCurrentIndex = candidateIndex;
+                UpdatePlaylistPlaybackPresentation();
+                return;
+            }
+
+            _playlistLoadErrorIndices.Add(candidateIndex);
+            UpdatePlaylistPlaybackPresentation();
+        }
+
+        _playlistCurrentIndex = null;
+        UpdatePlaylistPlaybackPresentation();
+        _playlistWindow?.ShowPlaybackNotification(
+            isNewSession || snapshot.Loop
+                ? "再生可能な項目がありません。欠損項目または読み込み不能項目を確認してください。"
+                : "プレイリストの末尾に到達したため停止しました。");
+    }
+
+    private async Task<bool> OpenVideoFromPlaylistAsync(string path)
+    {
+        if (_playbackBackend is null || _openTask is not null || _closeRequested)
+        {
+            return false;
+        }
+
+        _isOpeningVideo = true;
+        var openTask = OpenVideoAsync(path);
+        _openTask = openTask;
+        try
+        {
+            UpdatePlaybackButton();
+            UpdatePlaybackTimeline();
+            UpdateVolumeControls();
+            UpdatePlaybackRateControls();
+            return await openTask;
+        }
+        finally
+        {
+            if (ReferenceEquals(_openTask, openTask))
+            {
+                _openTask = null;
+            }
+
             _isOpeningVideo = false;
             if (!_closeRequested)
             {
                 UpdatePlaybackButton();
                 UpdatePlaybackTimeline();
+                UpdateVolumeControls();
+                UpdatePlaybackRateControls();
             }
         }
     }
 
-    internal async Task OpenVideoAsync(string path)
+    private void UpdatePlaylistPlaybackPresentation() =>
+        _playlistWindow?.UpdatePlaybackState(_playlistCurrentIndex, _playlistLoadErrorIndices);
+
+    private void CancelPlaylistPlayback()
     {
-        if (_playbackBackend is null || _errorReporter is null)
+        if (_playlistCurrentIndex is null && _playlistLoadErrorIndices.Count == 0)
         {
             return;
         }
 
+        _playlistCurrentIndex = null;
+        _playlistLoadErrorIndices.Clear();
+        UpdatePlaylistPlaybackPresentation();
+    }
+
+    private async Task PersistPlaylistMutationAsync(
+        PlaylistWindow? playlistWindow,
+        Func<PlaylistRepository, Task<JsonSaveResult>> mutation,
+        string notification,
+        Action? onMutationApplied = null)
+    {
+        var playlist = _playlist;
+        if (playlist is null || _closeRequested)
+        {
+            playlistWindow?.CompletePersistence(playlist?.GetSnapshot().Entries ?? []);
+            return;
+        }
+
+        if (_playlistMutationTask is not null)
+        {
+            return;
+        }
+
+        Task<JsonSaveResult> mutationTask;
+        try
+        {
+            mutationTask = mutation(playlist);
+        }
+        catch (Exception exception)
+        {
+            ReportPlaylistSaveFailure(exception, playlist.FilePath);
+            playlistWindow?.CompletePersistence(
+                playlist.GetSnapshot().Entries,
+                enablePersistence: true);
+            return;
+        }
+
+        _playlistMutationTask = mutationTask;
+        var saved = false;
+        try
+        {
+            var result = await mutationTask;
+            saved = result.Success;
+            if (!result.Success)
+            {
+                ReportPlaylistSaveFailure(
+                    result.Exception ?? new IOException(result.ErrorMessage),
+                    playlist.FilePath);
+            }
+        }
+        catch (Exception exception)
+        {
+            ReportPlaylistSaveFailure(exception, playlist.FilePath);
+        }
+        finally
+        {
+            onMutationApplied?.Invoke();
+            if (ReferenceEquals(_playlistMutationTask, mutationTask))
+            {
+                _playlistMutationTask = null;
+            }
+
+            if (!_closeRequested)
+            {
+                var entries = playlist.GetSnapshot().Entries;
+                playlistWindow?.CompletePersistence(
+                    entries,
+                    enablePersistence: true,
+                    notification: saved ? notification : null);
+                if (_playlistWindow is { } activeWindow &&
+                    !ReferenceEquals(activeWindow, playlistWindow))
+                {
+                    activeWindow.CompletePersistence(entries, enablePersistence: true);
+                }
+            }
+        }
+    }
+
+    private void RemapPlaylistPlaybackAfterRemoval(IReadOnlyList<int> removedIndices)
+    {
+        var removed = removedIndices.Distinct().Order().ToArray();
+        _playlistCurrentIndex = PlaylistPlaybackSequence.RemapAfterRemoval(_playlistCurrentIndex, removed);
+        var remappedErrors = _playlistLoadErrorIndices
+            .Select(index => PlaylistPlaybackSequence.RemapAfterRemoval(index, removed))
+            .Where(index => index is not null)
+            .Select(index => index!.Value)
+            .ToArray();
+        _playlistLoadErrorIndices.Clear();
+        _playlistLoadErrorIndices.UnionWith(remappedErrors);
+        UpdatePlaylistPlaybackPresentation();
+    }
+
+    private void RemapPlaylistPlaybackAfterMove(int sourceIndex, int insertionIndex)
+    {
+        _playlistCurrentIndex = PlaylistPlaybackSequence.RemapAfterMove(
+            _playlistCurrentIndex,
+            sourceIndex,
+            insertionIndex);
+        var remappedErrors = _playlistLoadErrorIndices
+            .Select(index => PlaylistPlaybackSequence.RemapAfterMove(
+                index,
+                sourceIndex,
+                insertionIndex)!.Value)
+            .ToArray();
+        _playlistLoadErrorIndices.Clear();
+        _playlistLoadErrorIndices.UnionWith(remappedErrors);
+        UpdatePlaylistPlaybackPresentation();
+    }
+
+    private void PlaylistWindow_OnClosed(object? sender, EventArgs eventArgs)
+    {
+        if (sender is PlaylistWindow playlistWindow)
+        {
+            playlistWindow.LoopChanged -= PlaylistWindow_OnLoopChanged;
+            playlistWindow.EntriesAddRequested -= PlaylistWindow_OnEntriesAddRequested;
+            playlistWindow.EntriesRemoveRequested -= PlaylistWindow_OnEntriesRemoveRequested;
+            playlistWindow.EntryMoveRequested -= PlaylistWindow_OnEntryMoveRequested;
+            playlistWindow.PlayRequested -= PlaylistWindow_OnPlayRequested;
+            playlistWindow.Closed -= PlaylistWindow_OnClosed;
+        }
+
+        _playlistWindow = null;
+        PlaylistMenuItem.IsChecked = false;
+    }
+
+    private async Task OpenVideoFromUserRequestAsync(string path)
+    {
+        if (_playbackBackend is null || _openTask is not null || _closeRequested)
+        {
+            return;
+        }
+
+        CancelPlaylistPlayback();
+        _isOpeningVideo = true;
+        var openTask = OpenVideoAsync(path);
+        _openTask = openTask;
+        try
+        {
+            UpdatePlaybackButton();
+            UpdatePlaybackTimeline();
+            UpdateVolumeControls();
+            UpdatePlaybackRateControls();
+            await openTask;
+        }
+        finally
+        {
+            if (ReferenceEquals(_openTask, openTask))
+            {
+                _openTask = null;
+            }
+
+            _isOpeningVideo = false;
+            if (!_closeRequested)
+            {
+                UpdatePlaybackButton();
+                UpdatePlaybackTimeline();
+                UpdateVolumeControls();
+                UpdatePlaybackRateControls();
+            }
+        }
+    }
+
+    internal async Task<bool> OpenVideoAsync(string path)
+    {
+        if (_playbackBackend is null || _errorReporter is null)
+        {
+            return false;
+        }
+
+        EndTemporaryPlaybackRateGesture();
+        CloseSeekThumbnail();
         OpenVideoMenuItem.IsEnabled = false;
         PlayPauseButton.IsEnabled = false;
         UpdatePlaybackTimeline();
@@ -164,14 +922,36 @@ public partial class MainWindow : Window
 
         using var openCancellation = new CancellationTokenSource();
         _openCancellation = openCancellation;
+        var opened = false;
 
         try
         {
-            if (await _playbackBackend.OpenAndPlayAsync(path, openCancellation.Token))
+            await FlushVideoProfilesAsync();
+            var initialState = GetInitialPlaybackState(path);
+            if (await _playbackBackend.OpenAndPlayAsync(
+                    path,
+                    initialState,
+                    openCancellation.Token))
             {
+                opened = true;
+                _hasPlaybackError = false;
+                PlaybackErrorOverlay.Visibility = Visibility.Collapsed;
                 EmptyStatePanel.Visibility = Visibility.Collapsed;
                 Title = $"{Path.GetFileName(path)} - {ApplicationInfo.DisplayName}";
                 NotificationBorder.Visibility = Visibility.Collapsed;
+                _thumbnailSession = ThumbnailGenerationSession.Create(
+                    path,
+                    _thumbnailIntervalPercent);
+                if (_thumbnailGenerationService is not null &&
+                    _playbackBackend.LengthMilliseconds > 0)
+                {
+                    _thumbnailGenerationRun = _thumbnailGenerationService.StartSession(
+                        _thumbnailSession.VideoPath,
+                        _playbackBackend.LengthMilliseconds,
+                        _thumbnailSession.IntervalPercent);
+                }
+                _playlistWindow?.UpdateCurrentMedia(path);
+                await RecordRecentFileAsync(path);
             }
             else if (!hadCurrentVideo)
             {
@@ -187,15 +967,27 @@ public partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            _errorReporter.Report(
-                new UserNotification(
-                    UserNotificationSeverity.Error,
-                    "動画を開けませんでした。",
-                    "別の動画を選択してください。"),
-                "playback-open-unexpected-failure",
-                exception.Message,
-                exception,
-                path);
+            if (Volatile.Read(ref _isOpeningPlaylistCandidate) != 0)
+            {
+                _errorReporter.ReportDiagnostic(
+                    DiagnosticSeverity.Error,
+                    "playlist-candidate-open-unexpected-failure",
+                    exception.Message,
+                    exception,
+                    path);
+            }
+            else
+            {
+                _errorReporter.Report(
+                    new UserNotification(
+                        UserNotificationSeverity.Error,
+                        "動画を開けませんでした。",
+                        "別の動画を選択してください。"),
+                    "playback-open-unexpected-failure",
+                    exception.Message,
+                    exception,
+                    path);
+            }
             if (!hadCurrentVideo)
             {
                 ShowEmptyState();
@@ -212,11 +1004,56 @@ public partial class MainWindow : Window
                 OpenVideoMenuItem.IsEnabled = true;
                 UpdatePlaybackButton();
                 UpdatePlaybackTimeline();
+                UpdateVolumeControls();
+                UpdatePlaybackRateControls();
             }
         }
+
+        return opened;
     }
 
     private void PlayPauseButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        TogglePlayPause();
+    }
+
+    internal async Task HandleLaunchRequestAsync(LaunchRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        BringToForeground();
+        if (request.FileArguments.Length != 1 || _closeRequested)
+        {
+            return;
+        }
+
+        if (_openTask is { } pendingOpen)
+        {
+            await pendingOpen;
+        }
+
+        await OpenVideoFromUserRequestAsync(request.FileArguments[0]);
+    }
+
+    private void BringToForeground()
+    {
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
+
+        Show();
+        Activate();
+        Topmost = true;
+        Topmost = false;
+        Focus();
+        _ = SetForegroundWindow(new WindowInteropHelper(this).Handle);
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetForegroundWindow(IntPtr window);
+
+    private void TogglePlayPause()
     {
         if (_playbackBackend?.CurrentPath is null || _openTask is not null)
         {
@@ -243,6 +1080,8 @@ public partial class MainWindow : Window
                 {
                     UpdatePlaybackButton();
                     UpdatePlaybackTimeline();
+                    UpdateVolumeControls();
+                    UpdatePlaybackRateControls();
                 });
             }
             catch (InvalidOperationException)
@@ -255,15 +1094,17 @@ public partial class MainWindow : Window
 
         UpdatePlaybackButton();
         UpdatePlaybackTimeline();
+        UpdateVolumeControls();
+        UpdatePlaybackRateControls();
     }
 
-    private void PlaybackBackend_OnErrorOccurred(object? sender, PlaybackErrorEventArgs eventArgs)
+    private void PlaybackBackend_OnPlaybackEnded(object? sender, EventArgs eventArgs)
     {
         if (!Dispatcher.CheckAccess())
         {
             try
             {
-                _ = Dispatcher.BeginInvoke(() => PlaybackBackend_OnErrorOccurred(sender, eventArgs));
+                _ = Dispatcher.BeginInvoke(() => PlaybackBackend_OnPlaybackEnded(sender, eventArgs));
             }
             catch (InvalidOperationException)
             {
@@ -273,8 +1114,77 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (_playlistCurrentIndex is { } currentIndex)
+        {
+            QueuePlaylistPlayback(currentIndex + 1, isNewSession: false);
+        }
+    }
+
+    private void PlaybackBackend_OnErrorOccurred(object? sender, PlaybackErrorEventArgs eventArgs)
+    {
+        var isPlaylistCandidate = Volatile.Read(ref _isOpeningPlaylistCandidate) != 0;
+        if (!Dispatcher.CheckAccess())
+        {
+            try
+            {
+                _ = Dispatcher.BeginInvoke(() =>
+                    HandlePlaybackError(eventArgs, isPlaylistCandidate));
+            }
+            catch (InvalidOperationException)
+            {
+                // The window Dispatcher is already shutting down.
+            }
+
+            return;
+        }
+
+        HandlePlaybackError(eventArgs, isPlaylistCandidate);
+    }
+
+    private void ThumbnailGenerationService_OnGenerationFailed(
+        object? sender,
+        ThumbnailGenerationErrorEventArgs eventArgs)
+    {
+        _errorReporter?.ReportDiagnostic(
+            DiagnosticSeverity.Warning,
+            "thumbnail-generation-failed",
+            eventArgs.Exception.Message,
+            eventArgs.Exception,
+            eventArgs.VideoPath);
+    }
+
+    private void HandlePlaybackError(
+        PlaybackErrorEventArgs eventArgs,
+        bool isPlaylistCandidate)
+    {
         if (_disposed || _errorReporter is null)
         {
+            return;
+        }
+
+        if (isPlaylistCandidate)
+        {
+            _errorReporter.ReportDiagnostic(
+                DiagnosticSeverity.Error,
+                $"playlist-{eventArgs.EventCode}",
+                eventArgs.TechnicalMessage,
+                eventArgs.Exception,
+                eventArgs.TargetPath);
+            return;
+        }
+
+        if (eventArgs.EventCode is
+            "playback-ended-early" or
+            "playback-native-error" or
+            "playback-audio-output-error")
+        {
+            ShowPlaybackError(eventArgs);
+            _errorReporter.ReportDiagnostic(
+                DiagnosticSeverity.Error,
+                eventArgs.EventCode,
+                eventArgs.TechnicalMessage,
+                eventArgs.Exception,
+                eventArgs.TargetPath);
             return;
         }
 
@@ -289,17 +1199,50 @@ public partial class MainWindow : Window
             eventArgs.TargetPath);
     }
 
+    private void ShowPlaybackError(PlaybackErrorEventArgs eventArgs)
+    {
+        EndTemporaryPlaybackRateGesture();
+        CloseSeekThumbnail();
+        _hasPlaybackError = true;
+        PlaybackErrorMessageText.Text = $"{eventArgs.UserMessage} {eventArgs.SuggestedAction}";
+        PlaybackErrorOverlay.Visibility = Visibility.Visible;
+        NotificationBorder.Visibility = Visibility.Collapsed;
+        UpdatePlaybackButton();
+        UpdatePlaybackTimeline();
+        UpdateVolumeControls();
+        UpdatePlaybackRateControls();
+    }
+
     protected override void OnClosing(CancelEventArgs e)
     {
-        if (!_allowClose && _openTask is { IsCompleted: false } openTask)
+        if (!_allowClose)
         {
             e.Cancel = true;
             if (!_closeRequested)
             {
                 _closeRequested = true;
+                EndTemporaryPlaybackRateGesture();
                 OpenVideoMenuItem.IsEnabled = false;
+                PlayPauseButton.IsEnabled = false;
+                SeekSlider.IsEnabled = false;
+                VolumeSlider.IsEnabled = false;
+                MuteButton.IsEnabled = false;
+                PlaybackRateMenuItem.IsEnabled = false;
+                RecentFilesMenuItem.IsEnabled = false;
+                PlaylistMenuItem.IsEnabled = false;
+                ThumbnailSettingsMenuItem.IsEnabled = false;
+                _playlistWindow?.DisablePersistenceControls();
+                VideoContextMenu.IsOpen = false;
                 _openCancellation?.Cancel();
-                _ = CloseAfterOpenCompletesAsync(openTask);
+                _videoProfileSaveTimer.Stop();
+                _thumbnailStopTask = _thumbnailGenerationService?.StopAsync();
+                _ = CloseAfterPendingWorkCompletesAsync(
+                    _openTask,
+                    _recentFileMutationTask,
+                    _playlistMutationTask,
+                    _playlistAdvanceTask,
+                    _appSettingsMutationTask,
+                    _thumbnailStopTask);
             }
 
             return;
@@ -311,39 +1254,313 @@ public partial class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         _disposed = true;
+        if (_playlistWindow is not null)
+        {
+            _playlistWindow.LoopChanged -= PlaylistWindow_OnLoopChanged;
+            _playlistWindow.EntriesAddRequested -= PlaylistWindow_OnEntriesAddRequested;
+            _playlistWindow.EntriesRemoveRequested -= PlaylistWindow_OnEntriesRemoveRequested;
+            _playlistWindow.EntryMoveRequested -= PlaylistWindow_OnEntryMoveRequested;
+            _playlistWindow.PlayRequested -= PlaylistWindow_OnPlayRequested;
+            _playlistWindow.Closed -= PlaylistWindow_OnClosed;
+            _playlistWindow.Close();
+            _playlistWindow = null;
+        }
         _playbackTimelineTimer.Stop();
         _playbackTimelineTimer.Tick -= PlaybackTimelineTimer_OnTick;
+        _videoProfileSaveTimer.Stop();
+        _videoProfileSaveTimer.Tick -= VideoProfileSaveTimer_OnTick;
+        _temporaryPlaybackRateTimer.Stop();
+        _temporaryPlaybackRateTimer.Tick -= TemporaryPlaybackRateTimer_OnTick;
+        _temporaryPlaybackRateReleaseTimer.Stop();
+        _temporaryPlaybackRateReleaseTimer.Tick -= TemporaryPlaybackRateReleaseTimer_OnTick;
+        _fullscreenControlsTimer.Stop();
+        _fullscreenControlsTimer.Tick -= FullscreenControlsTimer_OnTick;
+        _windowSource?.RemoveHook(WindowMessageHook);
+        _windowSource = null;
+        CloseSeekThumbnail();
         SeekSlider.RemoveHandler(Thumb.DragStartedEvent, new DragStartedEventHandler(SeekSlider_OnDragStarted));
         SeekSlider.RemoveHandler(Thumb.DragCompletedEvent, new DragCompletedEventHandler(SeekSlider_OnDragCompleted));
         if (_playbackBackend is not null)
         {
             _playbackBackend.ErrorOccurred -= PlaybackBackend_OnErrorOccurred;
             _playbackBackend.StateChanged -= PlaybackBackend_OnStateChanged;
+            _playbackBackend.PlaybackEnded -= PlaybackBackend_OnPlaybackEnded;
         }
 
         VideoView.MediaPlayer = null;
+        if (_thumbnailGenerationService is not null)
+        {
+            _thumbnailGenerationService.GenerationFailed -= ThumbnailGenerationService_OnGenerationFailed;
+            _thumbnailGenerationService.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            _thumbnailGenerationService = null;
+        }
         _playbackBackend?.Dispose();
         _playbackBackend = null;
+        _videoProfiles?.Dispose();
+        _videoProfiles = null;
+        _recentFiles?.Dispose();
+        _recentFiles = null;
+        _playlist?.Dispose();
+        _playlist = null;
+        _appSettings?.Dispose();
+        _appSettings = null;
+        _thumbnailSession = null;
+        _thumbnailGenerationRun = null;
         base.OnClosed(e);
     }
 
-    private async Task CloseAfterOpenCompletesAsync(Task openTask)
+    private async Task RecordRecentFileAsync(string path)
     {
+        var recentFiles = _recentFiles;
+        if (recentFiles is null)
+        {
+            return;
+        }
+
         try
         {
-            await openTask;
+            var saveResult = await recentFiles.RecordSuccessfulOpenAsync(path);
+            if (!_closeRequested)
+            {
+                RebuildRecentFilesMenu();
+            }
+
+            ReportRecentFileSaveFailure(saveResult, recentFiles.FilePath);
+        }
+        catch (Exception exception)
+        {
+            _errorReporter?.Report(
+                new UserNotification(
+                    UserNotificationSeverity.Warning,
+                    "最近開いたファイルの履歴を保存できません。",
+                    "再生は続行できます。アプリの配置先に書き込み権限があるか確認してください。"),
+                "recent-files-save-unexpected-failure",
+                exception.Message,
+                exception,
+                recentFiles.FilePath);
+        }
+    }
+
+    private async Task RunRecentFileMutationAsync(
+        Func<RecentFileRepository, Task<JsonSaveResult>> mutation)
+    {
+        var recentFiles = _recentFiles;
+        if (recentFiles is null || _recentFileMutationTask is not null || _closeRequested)
+        {
+            return;
+        }
+
+        RecentFilesMenuItem.IsEnabled = false;
+        Task<JsonSaveResult> mutationTask;
+        try
+        {
+            mutationTask = mutation(recentFiles);
+        }
+        catch (Exception exception)
+        {
+            ReportRecentFileUnexpectedFailure(exception, recentFiles.FilePath);
+            RebuildRecentFilesMenu();
+            RecentFilesMenuItem.IsEnabled = true;
+            return;
+        }
+
+        _recentFileMutationTask = mutationTask;
+        try
+        {
+            var saveResult = await mutationTask;
+            ReportRecentFileSaveFailure(saveResult, recentFiles.FilePath);
+        }
+        catch (Exception exception)
+        {
+            ReportRecentFileUnexpectedFailure(exception, recentFiles.FilePath);
+        }
+        finally
+        {
+            if (ReferenceEquals(_recentFileMutationTask, mutationTask))
+            {
+                _recentFileMutationTask = null;
+            }
+
+            if (!_closeRequested)
+            {
+                RebuildRecentFilesMenu();
+                RecentFilesMenuItem.IsEnabled = true;
+            }
+        }
+    }
+
+    private void RebuildRecentFilesMenu()
+    {
+        RecentFilesMenuItem.Items.Clear();
+        var presentation = RecentFileMenuPresentation.From(_recentFiles?.GetFiles() ?? []);
+        if (presentation.Files.Count == 0)
+        {
+            RecentFilesMenuItem.Items.Add(new MenuItem
+            {
+                Header = "（履歴はありません）",
+                IsEnabled = false,
+            });
+            return;
+        }
+
+        foreach (var file in presentation.Files)
+        {
+            RecentFilesMenuItem.Items.Add(new MenuItem
+            {
+                Header = file.IsMissing
+                    ? $"{file.DisplayName}（見つかりません）"
+                    : file.DisplayName,
+                ToolTip = file.Path,
+                Tag = new OpenRecentFileAction(file.Path),
+                IsEnabled = !file.IsMissing && _playbackBackend is not null,
+            });
+        }
+
+        if (presentation.MissingFiles.Count > 0)
+        {
+            RecentFilesMenuItem.Items.Add(new Separator());
+            var removeMissingMenu = new MenuItem { Header = "欠損した項目を履歴から削除" };
+            foreach (var file in presentation.MissingFiles)
+            {
+                removeMissingMenu.Items.Add(new MenuItem
+                {
+                    Header = file.DisplayName,
+                    ToolTip = file.Path,
+                    Tag = new RemoveRecentFileAction(file.Path),
+                });
+            }
+
+            if (presentation.ShowRemoveAllMissing)
+            {
+                removeMissingMenu.Items.Add(new Separator());
+                removeMissingMenu.Items.Add(new MenuItem
+                {
+                    Header = "すべて削除",
+                    Tag = new RemoveAllMissingRecentFilesAction(),
+                });
+            }
+
+            RecentFilesMenuItem.Items.Add(removeMissingMenu);
+        }
+
+        RecentFilesMenuItem.Items.Add(new Separator());
+        RecentFilesMenuItem.Items.Add(new MenuItem
+        {
+            Header = "履歴をすべて消去",
+            Tag = new ClearRecentFilesAction(),
+        });
+    }
+
+    private void ReportRecentFileSaveFailure(JsonSaveResult saveResult, string targetPath)
+    {
+        if (saveResult.Success)
+        {
+            return;
+        }
+
+        _errorReporter?.Report(
+            new UserNotification(
+                UserNotificationSeverity.Warning,
+                "最近開いたファイルの履歴を保存できません。",
+                "再生は続行できます。アプリの配置先に書き込み権限があるか確認してください。"),
+            "recent-files-save-failed",
+            saveResult.ErrorMessage ?? "The recent-file history save failed.",
+            saveResult.Exception,
+            targetPath);
+    }
+
+    private void ReportRecentFileUnexpectedFailure(Exception exception, string targetPath) =>
+        _errorReporter?.Report(
+            new UserNotification(
+                UserNotificationSeverity.Warning,
+                "最近開いたファイルの履歴を保存できません。",
+                "再生は続行できます。アプリの配置先に書き込み権限があるか確認してください。"),
+            "recent-files-save-unexpected-failure",
+            exception.Message,
+            exception,
+            targetPath);
+
+    private void ReportPlaylistSaveFailure(Exception exception, string targetPath) =>
+        _errorReporter?.Report(
+            new UserNotification(
+                UserNotificationSeverity.Warning,
+                "プレイリストを保存できません。",
+                "内容は現在の実行中だけ保持されます。アプリの配置先に書き込み権限があるか確認してください。"),
+            "playlist-save-failed",
+            exception.Message,
+            exception,
+            targetPath);
+
+    private void ReportAppSettingsSaveFailure(Exception exception, string targetPath) =>
+        _errorReporter?.Report(
+            new UserNotification(
+                UserNotificationSeverity.Warning,
+                "サムネイル設定を保存できません。",
+                "変更は現在の実行中だけ保持されます。アプリの配置先に書き込み権限があるか確認してください。"),
+            "settings-save-failed",
+            exception.Message,
+            exception,
+            targetPath);
+
+    private async Task CloseAfterPendingWorkCompletesAsync(
+        Task? openTask,
+        Task? recentFileMutationTask,
+        Task? playlistMutationTask,
+        Task? playlistAdvanceTask,
+        Task? appSettingsMutationTask,
+        Task? thumbnailStopTask)
+    {
+        // OnClosing must return before Close is requested again when there is no pending work.
+        await Dispatcher.Yield(DispatcherPriority.Background);
+
+        await IgnoreReportedPendingFailureAsync(openTask);
+        await IgnoreReportedPendingFailureAsync(recentFileMutationTask);
+        await IgnoreReportedPendingFailureAsync(playlistMutationTask);
+        await IgnoreReportedPendingFailureAsync(playlistAdvanceTask);
+        await IgnoreReportedPendingFailureAsync(appSettingsMutationTask);
+        await IgnoreReportedPendingFailureAsync(thumbnailStopTask);
+
+        try
+        {
+            CaptureCurrentVideoProfile(scheduleSave: false);
+            await FlushVideoProfilesAsync();
+        }
+        catch (Exception exception)
+        {
+            ReportUnexpectedVideoProfileFailure(exception);
+        }
+
+        _allowClose = true;
+        Close();
+    }
+
+    private static async Task IgnoreReportedPendingFailureAsync(Task? task)
+    {
+        if (task is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await task;
         }
         catch (OperationCanceledException)
         {
         }
         catch (Exception)
         {
-            // OpenVideoAsync reports the original failure before the window closes.
+            // The operation owner reports the original failure before normal shutdown continues.
         }
-
-        _allowClose = true;
-        Close();
     }
+
+    private sealed record OpenRecentFileAction(string Path);
+
+    private sealed record RemoveRecentFileAction(string Path);
+
+    private sealed record RemoveAllMissingRecentFilesAction;
+
+    private sealed record ClearRecentFilesAction;
 
     private void ShowEmptyState()
     {
@@ -363,14 +1580,19 @@ public partial class MainWindow : Window
         var presentation = PlaybackButtonPresentation.From(
             _playbackBackend?.CurrentPath is not null,
             _playbackBackend?.IsPlaying == true);
-        PlayPauseButton.IsEnabled = presentation.IsEnabled && _openTask is null;
+        PlayPauseButton.IsEnabled = presentation.IsEnabled && _openTask is null && !_hasPlaybackError;
         PlayPauseButton.Content = presentation.Glyph;
-        PlayPauseButton.ToolTip = presentation.ToolTip;
+        PlayPauseButton.ToolTip = _hasPlaybackError
+            ? "再生エラーのため操作できません"
+            : presentation.ToolTip;
         AutomationProperties.SetName(PlayPauseButton, presentation.AccessibleName);
     }
 
-    private void PlaybackTimelineTimer_OnTick(object? sender, EventArgs eventArgs) =>
+    private void PlaybackTimelineTimer_OnTick(object? sender, EventArgs eventArgs)
+    {
         UpdatePlaybackTimeline();
+        RefreshSeekThumbnail();
+    }
 
     private void UpdatePlaybackTimeline()
     {
@@ -387,8 +1609,15 @@ public partial class MainWindow : Window
             backend?.TimeMilliseconds ?? 0,
             backend?.LengthMilliseconds ?? 0);
 
-        SeekSlider.IsEnabled = presentation.IsSeekEnabled;
-        SeekSlider.ToolTip = presentation.SeekToolTip;
+        SeekSlider.IsEnabled = presentation.IsSeekEnabled && !_hasPlaybackError;
+        SeekSlider.ToolTip = _hasPlaybackError
+            ? "再生エラーのためシークできません"
+            : presentation.SeekToolTip;
+        if (!presentation.IsSeekEnabled)
+        {
+            CloseSeekThumbnail();
+        }
+        UpdateStartPositionMarker();
         if (_isSeekDragging || DateTime.UtcNow < _seekPresentationHoldUntilUtc)
         {
             return;
@@ -407,6 +1636,837 @@ public partial class MainWindow : Window
         TimeText.Text = presentation.TimeText;
     }
 
+    private void UpdateVolumeControls()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        var backend = _playbackBackend;
+        var presentation = PlaybackVolumePresentation.From(
+            backend?.CurrentPath is not null,
+            _isOpeningVideo || _openTask is not null,
+            _hasPlaybackError,
+            backend?.VolumePercent ?? PlaybackVolume.DefaultPercent,
+            backend?.IsMuted == true);
+
+        MuteButton.IsEnabled = presentation.IsEnabled;
+        MuteButton.Content = presentation.MuteGlyph;
+        MuteButton.ToolTip = presentation.MuteToolTip;
+        AutomationProperties.SetName(MuteButton, presentation.MuteAccessibleName);
+        VolumeSlider.IsEnabled = presentation.IsEnabled;
+        VolumeSlider.ToolTip = presentation.VolumeToolTip;
+
+        _isUpdatingVolumeSlider = true;
+        try
+        {
+            VolumeSlider.Value = presentation.VolumePercent;
+        }
+        finally
+        {
+            _isUpdatingVolumeSlider = false;
+        }
+
+        VolumeText.Text = $"{presentation.VolumePercent}%";
+        AutomationProperties.SetName(VolumeText, $"音量 {presentation.VolumePercent}%");
+    }
+
+    private void MuteButton_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        var backend = _playbackBackend;
+        if (!MuteButton.IsEnabled || backend is null)
+        {
+            return;
+        }
+
+        backend.SetMuted(!backend.IsMuted);
+        UpdateVolumeControls();
+        CaptureCurrentVideoProfile(scheduleSave: true);
+    }
+
+    private void VolumeSlider_OnValueChanged(
+        object sender,
+        RoutedPropertyChangedEventArgs<double> eventArgs)
+    {
+        var backend = _playbackBackend;
+        if (_isUpdatingVolumeSlider || !VolumeSlider.IsEnabled || backend is null)
+        {
+            return;
+        }
+
+        backend.SetVolumePercent((int)Math.Round(eventArgs.NewValue));
+        UpdateVolumeControls();
+        CaptureCurrentVideoProfile(scheduleSave: true);
+    }
+
+    private void VideoSurface_OnPreviewMouseWheel(object sender, MouseWheelEventArgs eventArgs)
+    {
+        var backend = _playbackBackend;
+        if (eventArgs.Delta == 0 || !VolumeSlider.IsEnabled || backend is null)
+        {
+            return;
+        }
+
+        backend.SetVolumePercent(
+            backend.VolumePercent + (Math.Sign(eventArgs.Delta) * PlaybackVolume.WheelStepPercent));
+        UpdateVolumeControls();
+        CaptureCurrentVideoProfile(scheduleSave: true);
+        eventArgs.Handled = true;
+    }
+
+    private void VideoSurface_OnPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs eventArgs)
+    {
+        if (eventArgs.ClickCount >= 2)
+        {
+            EndTemporaryPlaybackRateGesture();
+            if (CanControlPlayback() && !HasInputAncestor(eventArgs.OriginalSource as DependencyObject))
+            {
+                ToggleFullscreen();
+                eventArgs.Handled = true;
+            }
+
+            return;
+        }
+
+        if (!CanControlPlayback() || HasInputAncestor(eventArgs.OriginalSource as DependencyObject))
+        {
+            return;
+        }
+
+        VideoInteractionSurface.Focus();
+        var startPoint = eventArgs.GetPosition(VideoInteractionSurface);
+        _temporaryPlaybackRateGesture.Begin(startPoint.X, startPoint.Y);
+        _temporaryPlaybackRateTimer.Stop();
+        _temporaryPlaybackRateTimer.Start();
+        if (!Mouse.Capture(VideoInteractionSurface))
+        {
+            _temporaryPlaybackRateTimer.Stop();
+            _temporaryPlaybackRateGesture.Cancel();
+        }
+
+        UpdatePlaybackRateControls();
+    }
+
+    private void VideoSurface_OnPreviewMouseMove(object sender, MouseEventArgs eventArgs)
+    {
+        ShowFullscreenControlsForActivity();
+        var point = eventArgs.GetPosition(VideoInteractionSurface);
+        if (_temporaryPlaybackRateGesture.CancelIfMoved(
+                point.X,
+                point.Y,
+                SystemParameters.MinimumHorizontalDragDistance,
+                SystemParameters.MinimumVerticalDragDistance))
+        {
+            EndTemporaryPlaybackRateGesture();
+        }
+    }
+
+    private void Window_OnPreviewDragEnter(object sender, DragEventArgs eventArgs) =>
+        UpdateDropFeedback(eventArgs);
+
+    private void Window_OnPreviewDragOver(object sender, DragEventArgs eventArgs) =>
+        UpdateDropFeedback(eventArgs);
+
+    private void Window_OnPreviewDragLeave(object sender, DragEventArgs eventArgs)
+    {
+        DropTargetOverlay.Visibility = Visibility.Collapsed;
+        eventArgs.Handled = true;
+    }
+
+    private async void Window_OnPreviewDrop(object sender, DragEventArgs eventArgs)
+    {
+        DropTargetOverlay.Visibility = Visibility.Collapsed;
+        var request = ClassifyDrop(eventArgs.Data);
+        eventArgs.Handled = true;
+        EndTemporaryPlaybackRateGesture();
+
+        switch (request.Kind)
+        {
+            case FileDropRequestKind.SingleSupportedFile:
+                await OpenVideoFromUserRequestAsync(request.Path!);
+                break;
+            case FileDropRequestKind.MultipleFiles:
+                ShowNotification(new UserNotification(
+                    UserNotificationSeverity.Information,
+                    "メインウィンドウでは1ファイルだけ指定してください。",
+                    "動画を1ファイルだけ選び、もう一度ドロップしてください。"));
+                break;
+            case FileDropRequestKind.UnsupportedFile:
+                ShowNotification(new UserNotification(
+                    UserNotificationSeverity.Error,
+                    "MP4またはWMVファイルを指定してください。",
+                    "対応する動画ファイルを選び直してください。"));
+                break;
+        }
+    }
+
+    private void UpdateDropFeedback(DragEventArgs eventArgs)
+    {
+        var request = _openTask is null && !_closeRequested
+            ? ClassifyDrop(eventArgs.Data)
+            : new FileDropRequest(FileDropRequestKind.None);
+        DropTargetOverlay.Visibility = request.Kind == FileDropRequestKind.None
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        eventArgs.Effects = request.Kind == FileDropRequestKind.SingleSupportedFile
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
+        DropTargetText.Text = request.Kind switch
+        {
+            FileDropRequestKind.SingleSupportedFile => "動画をドロップして開く",
+            FileDropRequestKind.MultipleFiles => "1ファイルだけ指定してください",
+            FileDropRequestKind.UnsupportedFile => "MP4またはWMVを指定してください",
+            _ => string.Empty,
+        };
+        eventArgs.Handled = true;
+    }
+
+    private static FileDropRequest ClassifyDrop(IDataObject data)
+    {
+        try
+        {
+            var paths = data.GetDataPresent(DataFormats.FileDrop)
+                ? data.GetData(DataFormats.FileDrop) as string[] ?? []
+                : [];
+            return FileDropRequestClassifier.Classify(paths);
+        }
+        catch (Exception exception) when (
+            exception is COMException or ExternalException or InvalidOperationException)
+        {
+            return new FileDropRequest(FileDropRequestKind.None);
+        }
+    }
+
+    private void VideoSurface_OnPreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs eventArgs)
+    {
+        var wasGestureInProgress =
+            _temporaryPlaybackRateGesture.IsPending ||
+            _temporaryPlaybackRateGesture.IsActive;
+        EndTemporaryPlaybackRateGesture();
+        eventArgs.Handled = wasGestureInProgress;
+    }
+
+    private void VideoSurface_OnLostMouseCapture(object sender, MouseEventArgs eventArgs)
+    {
+        if (_temporaryPlaybackRateGesture.IsActive)
+        {
+            return;
+        }
+
+        if (_temporaryPlaybackRateGesture.IsPending)
+        {
+            EndTemporaryPlaybackRateGesture();
+        }
+    }
+
+    private void TemporaryPlaybackRateTimer_OnTick(object? sender, EventArgs eventArgs)
+    {
+        _temporaryPlaybackRateTimer.Stop();
+        var backend = _playbackBackend;
+        if (backend is null ||
+            !_temporaryPlaybackRateGesture.TryActivate(
+                Mouse.LeftButton == MouseButtonState.Pressed && CanControlPlayback(),
+                backend.Rate))
+        {
+            EndTemporaryPlaybackRateGesture();
+            return;
+        }
+
+        if (!backend.TrySetRate(2.0f))
+        {
+            _temporaryPlaybackRateGesture.Cancel();
+            ReleaseVideoSurfaceMouseCapture();
+            ReportPlaybackRateFailure(
+                "playback-temporary-rate-change-rejected",
+                "長押しの一時2.0倍速を開始できませんでした。");
+        }
+        else
+        {
+            _temporaryPlaybackRateReleaseTimer.Start();
+        }
+
+        UpdatePlaybackRateControls();
+    }
+
+    private void TemporaryPlaybackRateReleaseTimer_OnTick(object? sender, EventArgs eventArgs)
+    {
+        if (_temporaryPlaybackRateGesture.IsActive && Mouse.LeftButton == MouseButtonState.Released)
+        {
+            EndTemporaryPlaybackRateGesture();
+        }
+    }
+
+    private void EndTemporaryPlaybackRateGesture()
+    {
+        _temporaryPlaybackRateTimer.Stop();
+        _temporaryPlaybackRateReleaseTimer.Stop();
+        var rateToRestore = _temporaryPlaybackRateGesture.End();
+        var backend = _playbackBackend;
+        if (rateToRestore is { } rate &&
+            backend?.CurrentPath is not null &&
+            !backend.TrySetRate(rate))
+        {
+            ReportPlaybackRateFailure(
+                "playback-temporary-rate-restore-rejected",
+                "長押し前の再生速度へ戻せませんでした。");
+        }
+
+        ReleaseVideoSurfaceMouseCapture();
+        UpdatePlaybackRateControls();
+    }
+
+    private void ReleaseVideoSurfaceMouseCapture()
+    {
+        if (Mouse.Captured == VideoInteractionSurface)
+        {
+            Mouse.Capture(null);
+        }
+    }
+
+    private nint WindowMessageHook(
+        nint windowHandle,
+        int message,
+        nint wordParameter,
+        nint longParameter,
+        ref bool handled)
+    {
+        if (message == WindowMessageActivateApplication && wordParameter == 0)
+        {
+            EndTemporaryPlaybackRateGesture();
+        }
+
+        return 0;
+    }
+
+    private static bool HasInputAncestor(DependencyObject? source)
+    {
+        for (var current = source; current is not null; current = GetParent(current))
+        {
+            if (current is ButtonBase or Slider or ComboBox or TextBoxBase or PasswordBox or MenuItem)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static DependencyObject? GetParent(DependencyObject current) =>
+        current is System.Windows.Media.Visual or System.Windows.Media.Media3D.Visual3D
+            ? System.Windows.Media.VisualTreeHelper.GetParent(current)
+            : LogicalTreeHelper.GetParent(current);
+
+    private static bool IsShortcutInputFocused() =>
+        Keyboard.FocusedElement is DependencyObject focusedElement && HasInputAncestor(focusedElement);
+
+    private void VideoContextMenu_OnOpened(object sender, RoutedEventArgs eventArgs)
+    {
+        UpdateFullscreenControlsInteraction(isContextMenuOpen: true);
+        UpdatePlaybackRateControls();
+        SetStartPositionMenuItem.IsEnabled =
+            CanControlPlayback() &&
+            _videoProfiles is not null &&
+            _playbackBackend is { IsSeekable: true, LengthMilliseconds: > 0 };
+        FullscreenMenuItem.IsChecked = _isFullscreen;
+    }
+
+    private async void SetStartPositionMenuItem_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        var backend = _playbackBackend;
+        var profiles = _videoProfiles;
+        if (!SetStartPositionMenuItem.IsEnabled ||
+            backend?.CurrentPath is null ||
+            profiles is null ||
+            backend.LengthMilliseconds <= 0)
+        {
+            return;
+        }
+
+        eventArgs.Handled = true;
+        var path = backend.CurrentPath;
+        var positionMilliseconds = Math.Clamp(
+            backend.TimeMilliseconds,
+            0,
+            backend.LengthMilliseconds);
+        try
+        {
+            profiles.SetStartPosition(path, positionMilliseconds);
+            UpdateStartPositionMarker();
+            _videoProfileRevision++;
+            _videoProfileSaveTimer.Stop();
+            if (await FlushVideoProfilesAsync())
+            {
+                ShowNotification(new UserNotification(
+                    UserNotificationSeverity.Information,
+                    $"再生開始位置を {PlaybackTimelinePresentation.FormatMilliseconds(positionMilliseconds)} に設定しました。",
+                    "次回からこの位置で再生します。"));
+            }
+        }
+        catch (Exception exception)
+        {
+            ReportUnexpectedVideoProfileFailure(exception);
+        }
+    }
+
+    private void VideoContextMenu_OnClosed(object sender, RoutedEventArgs eventArgs) =>
+        UpdateFullscreenControlsInteraction(isContextMenuOpen: false);
+
+    private void Window_OnPreviewMouseMove(object sender, MouseEventArgs eventArgs) =>
+        ShowFullscreenControlsForActivity();
+
+    private void PlaybackControls_OnMouseEnter(object sender, MouseEventArgs eventArgs) =>
+        UpdateFullscreenControlsInteraction(isPointerOverControls: true);
+
+    private void PlaybackControls_OnMouseLeave(object sender, MouseEventArgs eventArgs) =>
+        UpdateFullscreenControlsInteraction(isPointerOverControls: false);
+
+    private void FullscreenMenuItem_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        ToggleFullscreen();
+        FullscreenMenuItem.IsChecked = _isFullscreen;
+        eventArgs.Handled = true;
+    }
+
+    private void Window_OnPreviewKeyDown(object sender, KeyEventArgs eventArgs)
+    {
+        var key = eventArgs.Key == Key.System ? eventArgs.SystemKey : eventArgs.Key;
+        var action = PlaybackShortcutMap.Resolve(key, Keyboard.Modifiers, _isFullscreen);
+        if (action == PlaybackShortcutAction.None)
+        {
+            return;
+        }
+
+        if (action == PlaybackShortcutAction.ToggleFullscreen)
+        {
+            ToggleFullscreen();
+            eventArgs.Handled = true;
+            return;
+        }
+
+        if (action == PlaybackShortcutAction.ExitFullscreen)
+        {
+            ExitFullscreen();
+            eventArgs.Handled = true;
+            return;
+        }
+
+        if (IsShortcutInputFocused() || !CanControlPlayback())
+        {
+            return;
+        }
+
+        switch (action)
+        {
+            case PlaybackShortcutAction.TogglePlayPause:
+                TogglePlayPause();
+                break;
+            case PlaybackShortcutAction.SeekBackward:
+                SeekByShortcut(-PlaybackShortcutMap.SeekStep);
+                break;
+            case PlaybackShortcutAction.SeekForward:
+                SeekByShortcut(PlaybackShortcutMap.SeekStep);
+                break;
+            case PlaybackShortcutAction.IncreasePlaybackRate:
+                StepPlaybackRate(1);
+                break;
+            case PlaybackShortcutAction.DecreasePlaybackRate:
+                StepPlaybackRate(-1);
+                break;
+        }
+
+        eventArgs.Handled = true;
+    }
+
+    private void SeekByShortcut(TimeSpan offset)
+    {
+        var backend = _playbackBackend;
+        if (backend is null || !backend.IsSeekable || backend.LengthMilliseconds <= 0)
+        {
+            return;
+        }
+
+        var normalizedPosition = PlaybackPosition.OffsetByMilliseconds(
+            backend.TimeMilliseconds,
+            backend.LengthMilliseconds,
+            (long)offset.TotalMilliseconds);
+        backend.Seek(normalizedPosition);
+        PresentRequestedSeek(normalizedPosition, backend.LengthMilliseconds);
+    }
+
+    private void PresentRequestedSeek(double normalizedPosition, long lengthMilliseconds)
+    {
+        _seekPresentationHoldUntilUtc = DateTime.UtcNow + PlaybackTimelineRefreshInterval;
+        _isUpdatingSeekSlider = true;
+        try
+        {
+            SeekSlider.Value = normalizedPosition;
+        }
+        finally
+        {
+            _isUpdatingSeekSlider = false;
+        }
+
+        var previewMilliseconds = (long)(normalizedPosition * lengthMilliseconds);
+        TimeText.Text =
+            $"{PlaybackTimelinePresentation.FormatMilliseconds(previewMilliseconds)} / " +
+            PlaybackTimelinePresentation.FormatMilliseconds(lengthMilliseconds);
+    }
+
+    private void StepPlaybackRate(int direction)
+    {
+        EndTemporaryPlaybackRateGesture();
+        var backend = _playbackBackend;
+        if (backend is null)
+        {
+            return;
+        }
+
+        var targetRate = PlaybackRate.Step(backend.Rate, direction);
+        if (!backend.TrySetRate(targetRate))
+        {
+            ReportPlaybackRateFailure(
+                "playback-shortcut-rate-change-rejected",
+                "再生速度を変更できませんでした。",
+                $"The playback backend rejected shortcut rate {targetRate}.");
+        }
+
+        UpdatePlaybackRateControls();
+    }
+
+    private void ToggleFullscreen()
+    {
+        if (_isFullscreen)
+        {
+            ExitFullscreen();
+        }
+        else
+        {
+            EnterFullscreen();
+        }
+    }
+
+    private void EnterFullscreen()
+    {
+        if (_isFullscreen)
+        {
+            return;
+        }
+
+        EndTemporaryPlaybackRateGesture();
+        _windowStateBeforeFullscreen = WindowState;
+        _windowStyleBeforeFullscreen = WindowStyle;
+        _resizeModeBeforeFullscreen = ResizeMode;
+
+        WindowState = WindowState.Normal;
+        WindowStyle = WindowStyle.None;
+        ResizeMode = ResizeMode.NoResize;
+        MainMenu.Visibility = Visibility.Collapsed;
+        Grid.SetRow(VideoSurface, 0);
+        Grid.SetRowSpan(VideoSurface, 4);
+        MovePlaybackControlsToFullscreenOverlay();
+        PlaybackControls.Opacity = 0.94;
+        WindowState = WindowState.Maximized;
+        _isFullscreen = true;
+        _fullscreenControlsState.EnterFullscreen();
+        _fullscreenControlsState.SetPointerOverControls(PlaybackControls.IsMouseOver);
+        _fullscreenControlsState.SetContextMenuOpen(VideoContextMenu.IsOpen);
+        ShowFullscreenControlsForActivity();
+    }
+
+    private void ExitFullscreen()
+    {
+        if (!_isFullscreen)
+        {
+            return;
+        }
+
+        EndTemporaryPlaybackRateGesture();
+        _fullscreenControlsTimer.Stop();
+        _fullscreenControlsState.ExitFullscreen();
+        PlaybackControls.Visibility = Visibility.Visible;
+        WindowState = WindowState.Normal;
+        WindowStyle = _windowStyleBeforeFullscreen;
+        ResizeMode = _resizeModeBeforeFullscreen;
+        Grid.SetRow(VideoSurface, 1);
+        Grid.SetRowSpan(VideoSurface, 1);
+        MovePlaybackControlsToNormalLayout();
+        PlaybackControls.Opacity = 1;
+        MainMenu.Visibility = Visibility.Visible;
+        _isFullscreen = false;
+        WindowState = _windowStateBeforeFullscreen;
+    }
+
+    private void MovePlaybackControlsToFullscreenOverlay()
+    {
+        if (!RootLayout.Children.Contains(PlaybackControls))
+        {
+            return;
+        }
+
+        RootLayout.Children.Remove(PlaybackControls);
+        VideoInteractionSurface.Children.Add(PlaybackControls);
+        PlaybackControls.VerticalAlignment = VerticalAlignment.Bottom;
+        Panel.SetZIndex(PlaybackControls, 1);
+    }
+
+    private void MovePlaybackControlsToNormalLayout()
+    {
+        if (!VideoInteractionSurface.Children.Contains(PlaybackControls))
+        {
+            return;
+        }
+
+        VideoInteractionSurface.Children.Remove(PlaybackControls);
+        RootLayout.Children.Add(PlaybackControls);
+        Grid.SetRow(PlaybackControls, 2);
+        PlaybackControls.VerticalAlignment = VerticalAlignment.Stretch;
+        Panel.SetZIndex(PlaybackControls, 0);
+    }
+
+    private void ShowFullscreenControlsForActivity()
+    {
+        if (!_fullscreenControlsState.ShowForActivity())
+        {
+            return;
+        }
+
+        PlaybackControls.Visibility = Visibility.Visible;
+        RestartFullscreenControlsTimerIfIdle();
+    }
+
+    private void UpdateFullscreenControlsInteraction(
+        bool? isPointerOverControls = null,
+        bool? isContextMenuOpen = null)
+    {
+        var isFullscreen = isPointerOverControls is { } pointerState
+            ? _fullscreenControlsState.SetPointerOverControls(pointerState)
+            : _fullscreenControlsState.SetContextMenuOpen(isContextMenuOpen ?? false);
+        if (!isFullscreen)
+        {
+            return;
+        }
+
+        PlaybackControls.Visibility = Visibility.Visible;
+        RestartFullscreenControlsTimerIfIdle();
+    }
+
+    private void RestartFullscreenControlsTimerIfIdle()
+    {
+        _fullscreenControlsTimer.Stop();
+        if (!_fullscreenControlsState.IsInteractionActive)
+        {
+            _fullscreenControlsTimer.Start();
+        }
+    }
+
+    private void FullscreenControlsTimer_OnTick(object? sender, EventArgs eventArgs)
+    {
+        _fullscreenControlsTimer.Stop();
+        _fullscreenControlsState.SetPointerOverControls(PlaybackControls.IsMouseOver);
+        _fullscreenControlsState.SetContextMenuOpen(VideoContextMenu.IsOpen);
+        if (_fullscreenControlsState.IsInteractionActive)
+        {
+            return;
+        }
+
+        if (_fullscreenControlsState.TryHideAfterTimeout())
+        {
+            CloseSeekThumbnail();
+            PlaybackControls.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void PlaybackRateMenuItem_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        var backend = _playbackBackend;
+        if (sender is not MenuItem { Tag: string rateText } ||
+            !PlaybackRateMenuItem.IsEnabled ||
+            backend is null ||
+            !PlaybackRate.TryParse(rateText, out var rate))
+        {
+            return;
+        }
+
+        if (!backend.TrySetRate(rate))
+        {
+            ReportPlaybackRateFailure(
+                "playback-rate-change-rejected",
+                "再生速度を変更できませんでした。",
+                $"The playback backend rejected rate {rateText}.");
+        }
+
+        UpdatePlaybackRateControls();
+        eventArgs.Handled = true;
+    }
+
+    private void UpdatePlaybackRateControls()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        var backend = _playbackBackend;
+        var currentRate = backend?.Rate ?? PlaybackRate.Default;
+        var formattedRate = PlaybackRate.Format(currentRate);
+        PlaybackRateText.Text = formattedRate;
+        AutomationProperties.SetName(PlaybackRateText, $"現在の再生速度 {formattedRate}");
+        PlaybackRateMenuItem.IsEnabled =
+            CanControlPlayback() &&
+            !_temporaryPlaybackRateGesture.IsPending &&
+            !_temporaryPlaybackRateGesture.IsActive;
+
+        foreach (var item in PlaybackRateMenuItem.Items.OfType<MenuItem>())
+        {
+            item.IsChecked =
+                item.Tag is string rateText &&
+                PlaybackRate.TryParse(rateText, out var itemRate) &&
+                PlaybackRate.AreEqual(itemRate, currentRate);
+        }
+    }
+
+    private bool CanControlPlayback() =>
+        _playbackBackend?.CurrentPath is not null &&
+        _openTask is null &&
+        !_isOpeningVideo &&
+        !_hasPlaybackError &&
+        !_closeRequested;
+
+    private void ReportPlaybackRateFailure(
+        string eventCode,
+        string message,
+        string? technicalMessage = null)
+    {
+        _errorReporter?.Report(
+            new UserNotification(
+                UserNotificationSeverity.Warning,
+                message,
+                "動画を開き直して、もう一度お試しください。"),
+            eventCode,
+            technicalMessage ?? message,
+            targetPath: _playbackBackend?.CurrentPath);
+    }
+
+    private PlaybackInitialState? GetInitialPlaybackState(string path)
+    {
+        var profiles = _videoProfiles;
+        if (profiles is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return profiles.TryGet(path, out var profile)
+                ? new PlaybackInitialState(
+                    new PlaybackAudioState(profile.VolumePercent, profile.IsMuted),
+                    profile.StartPositionMilliseconds)
+                : new PlaybackInitialState(PlaybackAudioState.Default, startPositionMilliseconds: null);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            // Let the playback backend report the invalid path through its structured error path.
+            return null;
+        }
+    }
+
+    private void CaptureCurrentVideoProfile(bool scheduleSave)
+    {
+        var backend = _playbackBackend;
+        var profiles = _videoProfiles;
+        if (backend?.CurrentPath is null || profiles is null)
+        {
+            return;
+        }
+
+        profiles.Set(backend.CurrentPath, backend.VolumePercent, backend.IsMuted);
+        _videoProfileRevision++;
+        if (scheduleSave)
+        {
+            _videoProfileSaveTimer.Stop();
+            _videoProfileSaveTimer.Start();
+        }
+    }
+
+    private async void VideoProfileSaveTimer_OnTick(object? sender, EventArgs eventArgs)
+    {
+        _videoProfileSaveTimer.Stop();
+        try
+        {
+            await FlushVideoProfilesAsync();
+        }
+        catch (Exception exception)
+        {
+            ReportUnexpectedVideoProfileFailure(exception);
+        }
+    }
+
+    private async Task<bool> FlushVideoProfilesAsync()
+    {
+        var profiles = _videoProfiles;
+        if (profiles is null || _savedVideoProfileRevision >= _videoProfileRevision)
+        {
+            return true;
+        }
+
+        if (_videoProfileSaveTask is { IsCompleted: false } pendingSave)
+        {
+            await pendingSave;
+            if (_savedVideoProfileRevision >= _videoProfileRevision)
+            {
+                return true;
+            }
+        }
+
+        var revision = _videoProfileRevision;
+        var saveTask = profiles.SaveAsync();
+        _videoProfileSaveTask = saveTask;
+        JsonSaveResult saveResult;
+        try
+        {
+            saveResult = await saveTask;
+        }
+        finally
+        {
+            if (ReferenceEquals(_videoProfileSaveTask, saveTask))
+            {
+                _videoProfileSaveTask = null;
+            }
+        }
+
+        if (saveResult.Success)
+        {
+            _savedVideoProfileRevision = Math.Max(_savedVideoProfileRevision, revision);
+            return true;
+        }
+
+        _errorReporter?.Report(
+            new UserNotification(
+                UserNotificationSeverity.Warning,
+                "動画ごとの設定を保存できません。",
+                "再生は続行できます。アプリの配置先に書き込み権限があるか確認してください。"),
+            "video-profiles-save-failed",
+            saveResult.ErrorMessage ?? "The video profile save failed.",
+            saveResult.Exception,
+            profiles.FilePath);
+        return false;
+    }
+
+    private void ReportUnexpectedVideoProfileFailure(Exception exception)
+    {
+        _errorReporter?.Report(
+            new UserNotification(
+                UserNotificationSeverity.Warning,
+                "動画ごとの設定を保存できません。",
+                "再生は続行できます。アプリの配置先に書き込み権限があるか確認してください。"),
+            "video-profiles-save-unexpected-failure",
+            exception.Message,
+            exception,
+            _videoProfiles?.FilePath);
+    }
+
     private void SeekSlider_OnValueChanged(object sender, RoutedPropertyChangedEventArgs<double> eventArgs)
     {
         var backend = _playbackBackend;
@@ -420,15 +2480,10 @@ public partial class MainWindow : Window
 
         var normalizedPosition = PlaybackPosition.Normalize(eventArgs.NewValue);
         backend.Seek(normalizedPosition);
-        _seekPresentationHoldUntilUtc = DateTime.UtcNow + PlaybackTimelineRefreshInterval;
-
         var lengthMilliseconds = backend.LengthMilliseconds;
         if (lengthMilliseconds > 0)
         {
-            var previewMilliseconds = (long)(normalizedPosition * lengthMilliseconds);
-            TimeText.Text =
-                $"{PlaybackTimelinePresentation.FormatMilliseconds(previewMilliseconds)} / " +
-                PlaybackTimelinePresentation.FormatMilliseconds(lengthMilliseconds);
+            PresentRequestedSeek(normalizedPosition, lengthMilliseconds);
         }
     }
 
@@ -438,6 +2493,154 @@ public partial class MainWindow : Window
     private void SeekSlider_OnDragCompleted(object sender, DragCompletedEventArgs eventArgs)
     {
         _isSeekDragging = false;
+    }
+
+    private void SeekSlider_OnSizeChanged(object sender, SizeChangedEventArgs eventArgs)
+    {
+        UpdateStartPositionMarker();
+        CloseSeekThumbnail();
+    }
+
+    private void SeekSlider_OnMouseMove(object sender, MouseEventArgs eventArgs) =>
+        UpdateSeekThumbnail(eventArgs.GetPosition(SeekSlider).X);
+
+    private void SeekSlider_OnMouseLeave(object sender, MouseEventArgs eventArgs) =>
+        CloseSeekThumbnail();
+
+    internal void UpdateSeekThumbnail(double pointerX)
+    {
+        var backend = _playbackBackend;
+        var run = _thumbnailGenerationRun;
+        var durationMilliseconds = run?.DurationMilliseconds ?? 0;
+        if (!SeekSlider.IsEnabled ||
+            backend?.CurrentPath is null ||
+            durationMilliseconds <= 0 ||
+            run is null ||
+            SeekSlider.ActualWidth <= 0)
+        {
+            CloseSeekThumbnail();
+            return;
+        }
+
+        var positionMilliseconds = SeekUiGeometry.PositionFromPointer(
+            pointerX,
+            SeekSlider.ActualWidth,
+            durationMilliseconds);
+        var targetMilliseconds = SeekUiGeometry.ThumbnailTargetMilliseconds(
+            positionMilliseconds,
+            durationMilliseconds,
+            run.IntervalPercent);
+        _pendingThumbnailGenerationId = run.GenerationId;
+        _pendingThumbnailTargetMilliseconds = targetMilliseconds;
+        ThumbnailTimeText.Text = PlaybackTimelinePresentation.FormatMilliseconds(
+            (long)positionMilliseconds);
+        var previewLayout = ThumbnailPreviewLayout.Create(
+            ActualWidth,
+            _thumbnailPreviewWidthPercent,
+            backend.VideoDisplayAspectRatio);
+        ThumbnailPopupBorder.Width = previewLayout.PopupWidth;
+        ThumbnailPreviewArtwork.Width = previewLayout.ImageWidth;
+        ThumbnailPreviewArtwork.Height = previewLayout.ImageHeight;
+        SeekThumbnailPopup.HorizontalOffset = SeekUiGeometry.PopupOffset(
+            pointerX,
+            SeekSlider.ActualWidth,
+            previewLayout.PopupWidth);
+        SeekThumbnailPopup.VerticalOffset = -(previewLayout.PopupHeight + ThumbnailPreviewGap);
+        SeekThumbnailPopup.IsOpen = true;
+
+        if (run.TryGet(targetMilliseconds, out var frame))
+        {
+            ShowThumbnailFrame(frame!);
+            return;
+        }
+
+        ThumbnailPreviewImage.Source = null;
+        ThumbnailLoadingText.Text = "サムネイルを準備中";
+        ThumbnailLoadingProgress.Visibility = Visibility.Visible;
+        ThumbnailLoadingOverlay.Visibility = Visibility.Visible;
+        run.RequestPriority(targetMilliseconds);
+    }
+
+    private void RefreshSeekThumbnail()
+    {
+        var run = _thumbnailGenerationRun;
+        ThumbnailFrame? frame = null;
+        var hasFrame = run is not null &&
+                       run.TryGet(_pendingThumbnailTargetMilliseconds, out frame);
+        var state = ThumbnailPreviewContent.Resolve(
+            SeekThumbnailPopup.IsOpen,
+            _pendingThumbnailTargetMilliseconds,
+            _pendingThumbnailGenerationId,
+            run?.GenerationId ?? 0,
+            hasFrame,
+            run?.Completion.IsCompleted == true);
+        if (state == ThumbnailPreviewContentState.Frame)
+        {
+            ShowThumbnailFrame(frame!);
+            return;
+        }
+
+        if (state == ThumbnailPreviewContentState.Unavailable)
+        {
+            ThumbnailPreviewImage.Source = null;
+            ThumbnailLoadingText.Text = "サムネイルを表示できません";
+            ThumbnailLoadingProgress.Visibility = Visibility.Collapsed;
+            ThumbnailLoadingOverlay.Visibility = Visibility.Visible;
+            return;
+        }
+    }
+
+    private void ShowThumbnailFrame(ThumbnailFrame frame)
+    {
+        var image = BitmapSource.Create(
+            frame.Width,
+            frame.Height,
+            96,
+            96,
+            PixelFormats.Bgra32,
+            palette: null,
+            frame.BgraPixels,
+            frame.Stride);
+        image.Freeze();
+        ThumbnailPreviewImage.Source = image;
+        ThumbnailLoadingOverlay.Visibility = Visibility.Collapsed;
+    }
+
+    internal void CloseSeekThumbnail()
+    {
+        SeekThumbnailPopup.IsOpen = false;
+        _pendingThumbnailGenerationId = 0;
+        _pendingThumbnailTargetMilliseconds = -1;
+        ThumbnailPreviewImage.Source = null;
+        ThumbnailLoadingText.Text = "サムネイルを準備中";
+        ThumbnailLoadingProgress.Visibility = Visibility.Visible;
+    }
+
+    private void UpdateStartPositionMarker()
+    {
+        var backend = _playbackBackend;
+        var profiles = _videoProfiles;
+        var durationMilliseconds = backend?.LengthMilliseconds ?? 0;
+        if (backend?.CurrentPath is not { } path ||
+            profiles is null ||
+            durationMilliseconds <= 0 ||
+            !profiles.TryGet(path, out var profile) ||
+            profile.StartPositionMilliseconds is not { } startPositionMilliseconds ||
+            startPositionMilliseconds > durationMilliseconds ||
+            SeekSlider.ActualWidth <= 0)
+        {
+            StartPositionMarker.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        Canvas.SetLeft(
+            StartPositionMarker,
+            SeekUiGeometry.MarkerOffset(
+                startPositionMilliseconds,
+                durationMilliseconds,
+                SeekSlider.ActualWidth,
+                StartPositionMarker.Width));
+        StartPositionMarker.Visibility = Visibility.Visible;
     }
 
     private void ExitMenuItem_OnClick(object sender, RoutedEventArgs e) => Close();

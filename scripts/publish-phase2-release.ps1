@@ -104,6 +104,11 @@ $expectedLgplSha256 = '730ACA838484E53C7C4838873DE0CF2F77FC08F27B18F3F20AB775A52
 if ((Get-FileHash -Algorithm SHA256 -LiteralPath $lgplText).Hash -ne $expectedLgplSha256) {
     throw 'The bundled LGPL-2.1 text does not match the pinned GNU source.'
 }
+$nAudioMitText = Join-Path $releaseAssets 'licenses\NAudio-MIT.txt'
+$expectedNAudioMitSha256 = '809820EA40A37C228470E47C1534332C2B8993157A8AEF3E74F196E917A67907'
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $nAudioMitText).Hash -ne $expectedNAudioMitSha256) {
+    throw 'The bundled NAudio MIT notice does not match the reviewed text.'
+}
 
 if (Test-Path -LiteralPath $outputRoot) {
     if (@(Get-ChildItem -LiteralPath $outputRoot -Force).Count -ne 0) {
@@ -130,6 +135,7 @@ $documentation = Join-Path $outputRoot 'docs'
 Copy-Item -LiteralPath (Join-Path $releaseAssets 'THIRD-PARTY-NOTICES.md') -Destination $outputRoot
 Copy-Item -LiteralPath (Join-Path $releaseAssets 'CORRESPONDING-SOURCE.md') -Destination $outputRoot
 Copy-Item -LiteralPath $lgplText -Destination $licenses
+Copy-Item -LiteralPath $nAudioMitText -Destination $licenses
 Copy-Item -LiteralPath (Join-Path $releaseAssets 'licenses\DOTNET-LICENSE.txt') -Destination $licenses
 Copy-Item -LiteralPath (Join-Path $releaseAssets 'DOTNET-THIRD-PARTY-NOTICES.txt') -Destination $outputRoot
 Copy-Item -LiteralPath (Join-Path $repoRoot 'README.md') -Destination $outputRoot
@@ -203,6 +209,8 @@ if ($runtimeConfig) {
         LibVLCSharp = '3.10.0'
         'LibVLCSharp.WPF' = '3.10.0'
         'VideoLAN.LibVLC.Windows' = '3.0.23.1'
+        'NAudio.Core' = '2.3.0'
+        'NAudio.Wasapi' = '2.3.0'
     }
     excludedGplPlugins = $forbiddenPluginNames
     libVlcPluginCount = @(Get-ChildItem -LiteralPath (Join-Path $libVlcDirectory 'plugins') -Recurse -File -Filter '*.dll').Count

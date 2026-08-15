@@ -4,6 +4,7 @@ namespace BakuretsuOsakanaKobo.Infrastructure.Errors;
 
 public enum UserNotificationSeverity
 {
+    Information,
     Warning,
     Error,
 }
@@ -40,9 +41,12 @@ public sealed class ErrorReporter
         ArgumentException.ThrowIfNullOrWhiteSpace(eventName);
         ArgumentException.ThrowIfNullOrWhiteSpace(diagnosticMessage);
 
-        var severity = notification.Severity == UserNotificationSeverity.Error
-            ? DiagnosticSeverity.Error
-            : DiagnosticSeverity.Warning;
+        var severity = notification.Severity switch
+        {
+            UserNotificationSeverity.Information => DiagnosticSeverity.Information,
+            UserNotificationSeverity.Error => DiagnosticSeverity.Error,
+            _ => DiagnosticSeverity.Warning,
+        };
         TryWriteDiagnostic(new DiagnosticEvent(
             severity,
             eventName,
@@ -61,6 +65,23 @@ public sealed class ErrorReporter
                 notificationException.Message,
                 notificationException));
         }
+    }
+
+    public void ReportDiagnostic(
+        DiagnosticSeverity severity,
+        string eventName,
+        string diagnosticMessage,
+        Exception? exception = null,
+        string? targetPath = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(eventName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(diagnosticMessage);
+        TryWriteDiagnostic(new DiagnosticEvent(
+            severity,
+            eventName,
+            diagnosticMessage,
+            exception,
+            targetPath));
     }
 
     private void TryWriteDiagnostic(DiagnosticEvent diagnosticEvent)

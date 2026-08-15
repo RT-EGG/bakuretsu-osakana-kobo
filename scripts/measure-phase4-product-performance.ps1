@@ -63,11 +63,12 @@ foreach ($condition in $conditions) {
             muted = [bool]$report.muted
             processStartToWindowLoadedMs = [Math]::Round([double]$report.processStartToWindowLoadedMs, 3)
             openToTimelineReadyMs = [Math]::Round([double]$report.openToTimelineReadyMs, 3)
+            openToAudioOutputReadyMs = [Math]::Round([double]$report.openToAudioOutputReadyMs, 3)
             seek50PercentMs = [Math]::Round([double]$report.seek50PercentMs, 3)
             seek90PercentMs = [Math]::Round([double]$report.seek90PercentMs, 3)
         }
         $results.Add($result)
-        Write-Output "$($condition.id) $run/${Runs}: start=$($result.processStartToWindowLoadedMs) ms, open=$($result.openToTimelineReadyMs) ms, seek50=$($result.seek50PercentMs) ms, seek90=$($result.seek90PercentMs) ms"
+        Write-Output "$($condition.id) $run/${Runs}: start=$($result.processStartToWindowLoadedMs) ms, video=$($result.openToTimelineReadyMs) ms, audio=$($result.openToAudioOutputReadyMs) ms, seek50=$($result.seek50PercentMs) ms, seek90=$($result.seek90PercentMs) ms"
     }
 }
 
@@ -84,6 +85,7 @@ $summary = @($conditions | ForEach-Object {
         maximum = [ordered]@{
             processStartToWindowLoadedMs = Get-Maximum $items 'processStartToWindowLoadedMs'
             openToTimelineReadyMs = Get-Maximum $items 'openToTimelineReadyMs'
+            openToAudioOutputReadyMs = Get-Maximum $items 'openToAudioOutputReadyMs'
             seek50PercentMs = Get-Maximum $items 'seek50PercentMs'
             seek90PercentMs = Get-Maximum $items 'seek90PercentMs'
         }
@@ -93,6 +95,7 @@ $summary = @($conditions | ForEach-Object {
 $thresholds = [ordered]@{
     processStartToWindowLoadedMs = 1500
     openToTimelineReadyMs = 1000
+    openToAudioOutputReadyMs = 1000
     seek50PercentMs = 1500
     seek90PercentMs = 1500
 }
@@ -100,13 +103,14 @@ $passed = @($summary | Where-Object {
     -not $_.allMuted -or
     $_.maximum.processStartToWindowLoadedMs -gt $thresholds.processStartToWindowLoadedMs -or
     $_.maximum.openToTimelineReadyMs -gt $thresholds.openToTimelineReadyMs -or
+    $_.maximum.openToAudioOutputReadyMs -gt $thresholds.openToAudioOutputReadyMs -or
     $_.maximum.seek50PercentMs -gt $thresholds.seek50PercentMs -or
     $_.maximum.seek90PercentMs -gt $thresholds.seek90PercentMs
 }).Count -eq 0
 
 [ordered]@{
     generatedAt = [DateTimeOffset]::Now.ToString('O')
-    method = 'Separate-process WPF validation using the product MainWindow, LibVlcPlaybackBackend, and seek Slider. Open readiness is the later of LibVLC Vout and playback clock >= 100 ms. Audio is muted before media opens.'
+    method = 'Separate-process WPF validation using the product MainWindow, LibVlcPlaybackBackend, unified LibVLC PCM/NAudio WASAPI output, and seek Slider. Video readiness is the later of LibVLC Vout and playback clock >= 100 ms. Audio readiness requires PCM callbacks and WASAPI output start. PCM is muted before media opens.'
     thresholds = $thresholds
     passed = $passed
     runs = $results

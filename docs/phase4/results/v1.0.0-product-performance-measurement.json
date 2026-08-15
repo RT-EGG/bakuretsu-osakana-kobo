@@ -1,0 +1,202 @@
+{
+  "generatedAt": "2026-08-15T19:55:43.0484316+09:00",
+  "method": "Separate-process WPF validation using the product MainWindow, LibVlcPlaybackBackend, unified LibVLC PCM/NAudio WASAPI output, and seek Slider. Video readiness is the later of LibVLC Vout and playback clock >= 100 ms. Audio readiness requires PCM callbacks and WASAPI output start. PCM is muted before media opens.",
+  "thresholds": {
+    "processStartToWindowLoadedMs": 1500,
+    "openToTimelineReadyMs": 1000,
+    "openToAudioOutputReadyMs": 1000,
+    "seek50PercentMs": 1500,
+    "seek90PercentMs": 1500
+  },
+  "passed": true,
+  "runs": [
+    {
+      "condition": "mp4-1080p60-60s",
+      "run": 1,
+      "muted": true,
+      "processStartToWindowLoadedMs": 794.858,
+      "openToTimelineReadyMs": 437.103,
+      "openToAudioOutputReadyMs": 439.549,
+      "seek50PercentMs": 477.307,
+      "seek90PercentMs": 363.371
+    },
+    {
+      "condition": "mp4-1080p60-60s",
+      "run": 2,
+      "muted": true,
+      "processStartToWindowLoadedMs": 812.378,
+      "openToTimelineReadyMs": 425.233,
+      "openToAudioOutputReadyMs": 427.457,
+      "seek50PercentMs": 486.736,
+      "seek90PercentMs": 355.018
+    },
+    {
+      "condition": "mp4-1080p60-60s",
+      "run": 3,
+      "muted": true,
+      "processStartToWindowLoadedMs": 790.143,
+      "openToTimelineReadyMs": 425.29,
+      "openToAudioOutputReadyMs": 427.798,
+      "seek50PercentMs": 479.331,
+      "seek90PercentMs": 363.263
+    },
+    {
+      "condition": "mp4-1080p60-60s",
+      "run": 4,
+      "muted": true,
+      "processStartToWindowLoadedMs": 785.509,
+      "openToTimelineReadyMs": 423.506,
+      "openToAudioOutputReadyMs": 425.637,
+      "seek50PercentMs": 484.028,
+      "seek90PercentMs": 351.927
+    },
+    {
+      "condition": "mp4-1080p60-60s",
+      "run": 5,
+      "muted": true,
+      "processStartToWindowLoadedMs": 824.485,
+      "openToTimelineReadyMs": 435.17,
+      "openToAudioOutputReadyMs": 437.759,
+      "seek50PercentMs": 479.295,
+      "seek90PercentMs": 361.953
+    },
+    {
+      "condition": "mp4-4k60-60s",
+      "run": 1,
+      "muted": true,
+      "processStartToWindowLoadedMs": 786.952,
+      "openToTimelineReadyMs": 440.599,
+      "openToAudioOutputReadyMs": 442.864,
+      "seek50PercentMs": 505.342,
+      "seek90PercentMs": 973.443
+    },
+    {
+      "condition": "mp4-4k60-60s",
+      "run": 2,
+      "muted": true,
+      "processStartToWindowLoadedMs": 794.882,
+      "openToTimelineReadyMs": 445.905,
+      "openToAudioOutputReadyMs": 448.179,
+      "seek50PercentMs": 506.178,
+      "seek90PercentMs": 960.191
+    },
+    {
+      "condition": "mp4-4k60-60s",
+      "run": 3,
+      "muted": true,
+      "processStartToWindowLoadedMs": 798.335,
+      "openToTimelineReadyMs": 437.312,
+      "openToAudioOutputReadyMs": 439.63,
+      "seek50PercentMs": 500.934,
+      "seek90PercentMs": 980.1
+    },
+    {
+      "condition": "mp4-4k60-60s",
+      "run": 4,
+      "muted": true,
+      "processStartToWindowLoadedMs": 822.368,
+      "openToTimelineReadyMs": 446.035,
+      "openToAudioOutputReadyMs": 448.265,
+      "seek50PercentMs": 508.828,
+      "seek90PercentMs": 987.012
+    },
+    {
+      "condition": "mp4-4k60-60s",
+      "run": 5,
+      "muted": true,
+      "processStartToWindowLoadedMs": 809.666,
+      "openToTimelineReadyMs": 450.738,
+      "openToAudioOutputReadyMs": 453.137,
+      "seek50PercentMs": 500.801,
+      "seek90PercentMs": 985.175
+    },
+    {
+      "condition": "wmv-1080p60-60s",
+      "run": 1,
+      "muted": true,
+      "processStartToWindowLoadedMs": 795.55,
+      "openToTimelineReadyMs": 564.374,
+      "openToAudioOutputReadyMs": 566.756,
+      "seek50PercentMs": 899.741,
+      "seek90PercentMs": 899.295
+    },
+    {
+      "condition": "wmv-1080p60-60s",
+      "run": 2,
+      "muted": true,
+      "processStartToWindowLoadedMs": 771.866,
+      "openToTimelineReadyMs": 570.985,
+      "openToAudioOutputReadyMs": 573.647,
+      "seek50PercentMs": 891.204,
+      "seek90PercentMs": 907.977
+    },
+    {
+      "condition": "wmv-1080p60-60s",
+      "run": 3,
+      "muted": true,
+      "processStartToWindowLoadedMs": 794.752,
+      "openToTimelineReadyMs": 568.178,
+      "openToAudioOutputReadyMs": 570.516,
+      "seek50PercentMs": 895.676,
+      "seek90PercentMs": 893.595
+    },
+    {
+      "condition": "wmv-1080p60-60s",
+      "run": 4,
+      "muted": true,
+      "processStartToWindowLoadedMs": 827.766,
+      "openToTimelineReadyMs": 571.123,
+      "openToAudioOutputReadyMs": 573.236,
+      "seek50PercentMs": 896.381,
+      "seek90PercentMs": 895.076
+    },
+    {
+      "condition": "wmv-1080p60-60s",
+      "run": 5,
+      "muted": true,
+      "processStartToWindowLoadedMs": 838.863,
+      "openToTimelineReadyMs": 559.148,
+      "openToAudioOutputReadyMs": 561.876,
+      "seek50PercentMs": 889.287,
+      "seek90PercentMs": 906.195
+    }
+  ],
+  "summary": [
+    {
+      "condition": "mp4-1080p60-60s",
+      "runs": 5,
+      "allMuted": true,
+      "maximum": {
+        "processStartToWindowLoadedMs": 824.485,
+        "openToTimelineReadyMs": 437.103,
+        "openToAudioOutputReadyMs": 439.549,
+        "seek50PercentMs": 486.736,
+        "seek90PercentMs": 363.371
+      }
+    },
+    {
+      "condition": "mp4-4k60-60s",
+      "runs": 5,
+      "allMuted": true,
+      "maximum": {
+        "processStartToWindowLoadedMs": 822.368,
+        "openToTimelineReadyMs": 450.738,
+        "openToAudioOutputReadyMs": 453.137,
+        "seek50PercentMs": 508.828,
+        "seek90PercentMs": 987.012
+      }
+    },
+    {
+      "condition": "wmv-1080p60-60s",
+      "runs": 5,
+      "allMuted": true,
+      "maximum": {
+        "processStartToWindowLoadedMs": 838.863,
+        "openToTimelineReadyMs": 571.123,
+        "openToAudioOutputReadyMs": 573.647,
+        "seek50PercentMs": 899.741,
+        "seek90PercentMs": 907.977
+      }
+    }
+  ]
+}

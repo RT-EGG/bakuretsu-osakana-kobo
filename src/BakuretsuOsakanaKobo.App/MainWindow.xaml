@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vlc="clr-namespace:LibVLCSharp.WPF;assembly=LibVLCSharp.WPF"
         Title="爆裂おさかな工房"
+        Icon="Assets/BakuretsuOsakanaKobo.ico"
         Width="1000"
         Height="650"
         MinWidth="720"
@@ -12,8 +13,15 @@
         Foreground="{StaticResource TextBrush}"
         UseLayoutRounding="True"
         SnapsToDevicePixels="True"
+        AllowDrop="True"
+        PreviewKeyDown="Window_OnPreviewKeyDown"
+        PreviewMouseMove="Window_OnPreviewMouseMove"
+        PreviewDragEnter="Window_OnPreviewDragEnter"
+        PreviewDragOver="Window_OnPreviewDragOver"
+        PreviewDragLeave="Window_OnPreviewDragLeave"
+        PreviewDrop="Window_OnPreviewDrop"
         AutomationProperties.Name="爆裂おさかな工房">
-    <Grid>
+    <Grid x:Name="RootLayout">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -21,37 +29,156 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Menu Grid.Row="0">
+        <Menu x:Name="MainMenu" Grid.Row="0">
             <MenuItem Header="ファイル(_F)">
                 <MenuItem x:Name="OpenVideoMenuItem"
                           Header="開く(_O)..."
                           IsEnabled="False"
                           Click="OpenVideoMenuItem_OnClick" />
+                <MenuItem x:Name="RecentFilesMenuItem"
+                          Header="最近開いたファイル(_R)"
+                          Click="RecentFilesMenuItem_OnClick" />
                 <Separator />
                 <MenuItem Header="データフォルダーを開く(_D)" Click="OpenDataFolderMenuItem_OnClick" />
                 <Separator />
                 <MenuItem Header="終了(_X)" Click="ExitMenuItem_OnClick" />
             </MenuItem>
+            <MenuItem Header="表示(_V)">
+                <MenuItem x:Name="PlaylistMenuItem"
+                          Header="プレイリスト(_P)"
+                          IsCheckable="True"
+                          Checked="PlaylistMenuItem_OnCheckedChanged"
+                          Unchecked="PlaylistMenuItem_OnCheckedChanged" />
+                <Separator />
+                <MenuItem x:Name="ThumbnailSettingsMenuItem"
+                          Header="サムネイル設定(_T)…"
+                          IsEnabled="False"
+                          Click="ThumbnailSettingsMenuItem_OnClick" />
+            </MenuItem>
         </Menu>
 
-        <Grid Grid.Row="1" Background="Black">
+        <Grid x:Name="VideoSurface"
+              Grid.Row="1"
+              Background="Black">
             <vlc:VideoView x:Name="VideoView"
                            HorizontalContentAlignment="Stretch"
                            VerticalContentAlignment="Stretch">
-                <StackPanel x:Name="EmptyStatePanel"
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Center">
-                    <TextBlock x:Name="EmptyStateTitleText"
-                               HorizontalAlignment="Center"
-                               FontSize="20"
-                               FontWeight="SemiBold"
-                               Text="動画が選択されていません" />
-                    <TextBlock x:Name="EmptyStateDescriptionText"
-                               Margin="0,10,0,0"
-                               HorizontalAlignment="Center"
-                               Foreground="{StaticResource MutedTextBrush}"
-                               Text="「ファイル」→「開く」からmp4またはwmvを選択してください" />
-                </StackPanel>
+                <Grid x:Name="VideoInteractionSurface"
+                      Background="#01000000"
+                      Focusable="True"
+                      AllowDrop="True"
+                      PreviewKeyDown="Window_OnPreviewKeyDown"
+                      PreviewMouseWheel="VideoSurface_OnPreviewMouseWheel"
+                      PreviewMouseLeftButtonDown="VideoSurface_OnPreviewMouseLeftButtonDown"
+                      PreviewMouseLeftButtonUp="VideoSurface_OnPreviewMouseLeftButtonUp"
+                      PreviewMouseMove="VideoSurface_OnPreviewMouseMove"
+                      LostMouseCapture="VideoSurface_OnLostMouseCapture"
+                      PreviewDragEnter="Window_OnPreviewDragEnter"
+                      PreviewDragOver="Window_OnPreviewDragOver"
+                      PreviewDragLeave="Window_OnPreviewDragLeave"
+                      PreviewDrop="Window_OnPreviewDrop">
+                    <Grid.ContextMenu>
+                        <ContextMenu x:Name="VideoContextMenu"
+                                     Opened="VideoContextMenu_OnOpened"
+                                     Closed="VideoContextMenu_OnClosed">
+                            <MenuItem x:Name="PlaybackRateMenuItem" Header="再生速度">
+                                <MenuItem Header="0.25×" Tag="0.25" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
+                                <MenuItem Header="0.5×" Tag="0.5" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
+                                <MenuItem Header="1.0×" Tag="1.0" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
+                                <MenuItem Header="1.5×" Tag="1.5" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
+                                <MenuItem Header="2.0×" Tag="2.0" IsCheckable="True" Click="PlaybackRateMenuItem_OnClick" />
+                            </MenuItem>
+                            <Separator />
+                            <MenuItem x:Name="SetStartPositionMenuItem"
+                                      Header="現在位置を再生開始位置に設定"
+                                      Click="SetStartPositionMenuItem_OnClick" />
+                            <Separator />
+                            <MenuItem x:Name="FullscreenMenuItem"
+                                      Header="フルスクリーン"
+                                      IsCheckable="True"
+                                      Click="FullscreenMenuItem_OnClick" />
+                        </ContextMenu>
+                    </Grid.ContextMenu>
+                    <StackPanel x:Name="EmptyStatePanel"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center">
+                        <TextBlock x:Name="EmptyStateTitleText"
+                                   HorizontalAlignment="Center"
+                                   FontSize="20"
+                                   FontWeight="SemiBold"
+                                   Text="動画が選択されていません" />
+                        <TextBlock x:Name="EmptyStateDescriptionText"
+                                   Margin="0,10,0,0"
+                                   HorizontalAlignment="Center"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   Text="MP4 または WMV をここにドラッグ＆ドロップできます" />
+                    </StackPanel>
+                    <Border x:Name="PlaybackErrorOverlay"
+                            Background="#C205080D"
+                            Visibility="Collapsed"
+                            AutomationProperties.Name="再生中にエラーが発生しました">
+                        <StackPanel Width="430"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center">
+                            <Border Width="62"
+                                    Height="62"
+                                    HorizontalAlignment="Center"
+                                    Background="#3A1C28"
+                                    CornerRadius="31">
+                                <TextBlock HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           FontSize="30"
+                                           FontWeight="Bold"
+                                           Foreground="{StaticResource ErrorBrush}"
+                                           Text="!" />
+                            </Border>
+                            <TextBlock Margin="0,18,0,0"
+                                       HorizontalAlignment="Center"
+                                       FontSize="22"
+                                       FontWeight="SemiBold"
+                                       Text="再生中にエラーが発生しました" />
+                            <TextBlock x:Name="PlaybackErrorMessageText"
+                                       Margin="0,8,0,6"
+                                       HorizontalAlignment="Center"
+                                       TextAlignment="Center"
+                                       TextWrapping="Wrap"
+                                       Foreground="{StaticResource MutedTextBrush}"
+                                       Text="動画の破損により再生を続けられません。別の動画を選択してください。" />
+                            <TextBlock Margin="0,0,0,20"
+                                       HorizontalAlignment="Center"
+                                       FontSize="11"
+                                       Foreground="{StaticResource MutedTextBrush}"
+                                       Text="診断用の詳細はログに記録しました。" />
+                            <Button Width="152"
+                                    HorizontalAlignment="Center"
+                                    Style="{StaticResource PlaylistPrimaryButtonStyle}"
+                                    Click="PlaybackErrorOpenFileButton_OnClick"
+                                    Content="別の動画を開く" />
+                        </StackPanel>
+                    </Border>
+                    <Border x:Name="DropTargetOverlay"
+                            Margin="24"
+                            Background="#E6172635"
+                            BorderBrush="{StaticResource PrimaryBrush}"
+                            BorderThickness="2"
+                            CornerRadius="10"
+                            Visibility="Collapsed"
+                            IsHitTestVisible="False"
+                            AutomationProperties.Name="ファイルドロップ先">
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock HorizontalAlignment="Center"
+                                       FontSize="42"
+                                       Foreground="{StaticResource PrimaryBrush}"
+                                       Text="↓" />
+                            <TextBlock x:Name="DropTargetText"
+                                       Margin="0,10,0,0"
+                                       HorizontalAlignment="Center"
+                                       FontSize="20"
+                                       FontWeight="SemiBold"
+                                       Text="動画をドロップして開く" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
             </vlc:VideoView>
         </Grid>
 
@@ -60,11 +187,18 @@
                 Padding="10,8"
                 Background="{StaticResource PanelBrush}"
                 BorderBrush="{StaticResource BorderBrush}"
-                BorderThickness="0,1,0,0">
+                BorderThickness="0,1,0,0"
+                PreviewKeyDown="Window_OnPreviewKeyDown"
+                MouseEnter="PlaybackControls_OnMouseEnter"
+                MouseLeave="PlaybackControls_OnMouseLeave">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="96" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
@@ -80,21 +214,42 @@
                         Click="PlayPauseButton_OnClick"
                         Content="▶"
                         AutomationProperties.Name="再生" />
-                <Slider x:Name="SeekSlider"
-                        Grid.Column="1"
-                        Height="22"
-                        Margin="12,0,14,0"
-                        VerticalAlignment="Center"
-                        Minimum="0"
-                        Maximum="1"
-                        SmallChange="0.01"
-                        LargeChange="0.05"
-                        IsMoveToPointEnabled="True"
-                        IsEnabled="False"
-                        ToolTip="動画を開くとシークできます"
-                        ToolTipService.ShowOnDisabled="True"
-                        ValueChanged="SeekSlider_OnValueChanged"
-                        AutomationProperties.Name="再生位置" />
+                <Grid x:Name="SeekArea"
+                      Grid.Column="1"
+                      Height="22"
+                      Margin="12,0,14,0"
+                      VerticalAlignment="Center">
+                    <Slider x:Name="SeekSlider"
+                            Height="22"
+                            Minimum="0"
+                            Maximum="1"
+                            SmallChange="0.01"
+                            LargeChange="0.05"
+                            IsMoveToPointEnabled="True"
+                            IsEnabled="False"
+                            ToolTip="動画を開くとシークできます"
+                            ToolTipService.ShowOnDisabled="True"
+                            ValueChanged="SeekSlider_OnValueChanged"
+                            SizeChanged="SeekSlider_OnSizeChanged"
+                            MouseMove="SeekSlider_OnMouseMove"
+                            MouseLeave="SeekSlider_OnMouseLeave"
+                            AutomationProperties.Name="再生位置" />
+                    <Canvas IsHitTestVisible="False">
+                        <Grid x:Name="StartPositionMarker"
+                              Width="8"
+                              Height="20"
+                              Visibility="Collapsed"
+                              AutomationProperties.Name="登録済み再生開始位置">
+                            <Polygon Points="0,0 8,0 4,6" Fill="#FFC857" />
+                            <Border Width="2"
+                                    Height="13"
+                                    Margin="0,5,0,0"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Top"
+                                    Background="#FFC857" />
+                        </Grid>
+                    </Canvas>
+                </Grid>
                 <TextBlock x:Name="TimeText"
                            Grid.Column="2"
                            MinWidth="164"
@@ -103,8 +258,121 @@
                            FontSize="13"
                            Text="--:--:-- / --:--:--"
                            AutomationProperties.Name="再生時刻" />
+                <Button x:Name="MuteButton"
+                        Grid.Column="3"
+                        Width="38"
+                        Height="34"
+                        Margin="12,0,6,0"
+                        Padding="0"
+                        FontSize="16"
+                        IsEnabled="False"
+                        ToolTip="動画を開くとミュートを変更できます"
+                        ToolTipService.ShowOnDisabled="True"
+                        Click="MuteButton_OnClick"
+                        Content="🔊"
+                        AutomationProperties.Name="ミュート" />
+                <Slider x:Name="VolumeSlider"
+                        Grid.Column="4"
+                        Height="22"
+                        VerticalAlignment="Center"
+                        Minimum="0"
+                        Maximum="500"
+                        Value="100"
+                        SmallChange="1"
+                        LargeChange="5"
+                        TickFrequency="5"
+                        IsMoveToPointEnabled="True"
+                        IsEnabled="False"
+                        ToolTip="動画を開くと音量を変更できます"
+                        ToolTipService.ShowOnDisabled="True"
+                        ValueChanged="VolumeSlider_OnValueChanged"
+                        AutomationProperties.Name="音量" />
+                <TextBlock x:Name="VolumeText"
+                           Grid.Column="5"
+                           MinWidth="43"
+                           Margin="7,0,0,0"
+                           VerticalAlignment="Center"
+                           FontFamily="Cascadia Mono, Consolas"
+                           FontSize="13"
+                           Text="100%"
+                           AutomationProperties.Name="音量 100%" />
+                <Border Grid.Column="6"
+                        MinWidth="48"
+                        Height="28"
+                        Margin="10,0,0,0"
+                        Padding="7,0"
+                        VerticalAlignment="Center"
+                        Background="{StaticResource AppBackgroundBrush}"
+                        BorderBrush="{StaticResource BorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="5"
+                        ToolTip="現在の再生速度">
+                    <TextBlock x:Name="PlaybackRateText"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               FontFamily="Cascadia Mono, Consolas"
+                               FontSize="13"
+                               Text="1.0×"
+                               AutomationProperties.Name="現在の再生速度 1.0倍" />
+                </Border>
             </Grid>
         </Border>
+
+        <Popup x:Name="SeekThumbnailPopup"
+               PlacementTarget="{Binding ElementName=SeekSlider}"
+               Placement="Relative"
+               AllowsTransparency="True"
+               PopupAnimation="Fade"
+               StaysOpen="True"
+               IsHitTestVisible="False"
+               Focusable="False">
+            <Border x:Name="ThumbnailPopupBorder"
+                    Padding="5"
+                    Background="#F20B1119"
+                    BorderBrush="#6A7F99"
+                    BorderThickness="1"
+                    CornerRadius="6">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="28" />
+                    </Grid.RowDefinitions>
+                    <Border x:Name="ThumbnailPreviewArtwork"
+                            Width="150"
+                            Height="84.375"
+                            ClipToBounds="True"
+                            CornerRadius="3"
+                            Background="#101D2A">
+                        <Image x:Name="ThumbnailPreviewImage"
+                               Stretch="UniformToFill"
+                               SnapsToDevicePixels="True" />
+                    </Border>
+                    <Border x:Name="ThumbnailLoadingOverlay"
+                            Grid.Row="0"
+                            Background="#D90B1119">
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <ProgressBar x:Name="ThumbnailLoadingProgress"
+                                         Width="112"
+                                         Height="3"
+                                         IsIndeterminate="True"
+                                         Foreground="{StaticResource PrimaryBrush}" />
+                            <TextBlock x:Name="ThumbnailLoadingText"
+                                       Margin="0,9,0,0"
+                                       FontSize="11"
+                                       Foreground="{StaticResource MutedTextBrush}"
+                                       Text="サムネイルを準備中" />
+                        </StackPanel>
+                    </Border>
+                    <TextBlock x:Name="ThumbnailTimeText"
+                               Grid.Row="1"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               FontFamily="Cascadia Mono, Consolas"
+                               FontSize="13"
+                               Text="00:00:00" />
+                </Grid>
+            </Border>
+        </Popup>
 
         <Border x:Name="NotificationBorder"
                 Grid.Row="3"

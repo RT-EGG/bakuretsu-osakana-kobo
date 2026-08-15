@@ -5,7 +5,54 @@
         <SolidColorBrush x:Key="AppBackgroundBrush" Color="#0C1119" />
         <SolidColorBrush x:Key="TextBrush" Color="#F2F6FC" />
         <SolidColorBrush x:Key="MutedTextBrush" Color="#9DABC0" />
+        <SolidColorBrush x:Key="ErrorBrush" Color="#FF6B79" />
         <SolidColorBrush x:Key="PanelBrush" Color="#151D29" />
+        <SolidColorBrush x:Key="PanelRaisedBrush" Color="#1C2634" />
         <SolidColorBrush x:Key="BorderBrush" Color="#344156" />
+        <SolidColorBrush x:Key="PrimaryBrush" Color="#47B8FF" />
+        <SolidColorBrush x:Key="PrimaryHoverBrush" Color="#70C8FF" />
+
+        <Style x:Key="PlaylistButtonStyle" TargetType="Button">
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="Background" Value="{StaticResource PanelRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="14,8" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome"
+                                Padding="{TemplateBinding Padding}"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource PrimaryHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource PrimaryBrush}" />
+                                <Setter TargetName="Chrome" Property="BorderThickness" Value="2" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Chrome" Property="Opacity" Value="0.38" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="PlaylistPrimaryButtonStyle"
+               TargetType="Button"
+               BasedOn="{StaticResource PlaylistButtonStyle}">
+            <Setter Property="Foreground" Value="#07111A" />
+            <Setter Property="Background" Value="{StaticResource PrimaryBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource PrimaryBrush}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
     </Application.Resources>
 </Application>

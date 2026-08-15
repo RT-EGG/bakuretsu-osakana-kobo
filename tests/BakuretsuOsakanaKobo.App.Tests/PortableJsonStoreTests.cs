@@ -15,6 +15,12 @@ public sealed class PortableJsonStoreTests
 
         Assert.Equal(System.IO.Path.Combine(directory.Path, "data"), paths.DataDirectory);
         Assert.Equal(System.IO.Path.Combine(directory.Path, "data", "settings.json"), paths.SettingsFilePath);
+        Assert.Equal(
+            System.IO.Path.Combine(directory.Path, "data", "video-profiles.json"),
+            paths.VideoProfilesFilePath);
+        Assert.Equal(
+            System.IO.Path.Combine(directory.Path, "data", "playlist.json"),
+            paths.PlaylistFilePath);
     }
 
     [Fact]

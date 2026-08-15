@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using LibVLCSharp.Shared;
 
 namespace BakuretsuOsakanaKobo.Playback;
@@ -6,7 +7,16 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
 {
     private readonly LibVLC _libVlc;
     private readonly Action<Exception>? _callbackExceptionHandler;
+    private readonly RealtimeAudioOutput _audioOutput;
     private Media? _currentMedia;
+    private int _volumePercent = PlaybackVolume.DefaultPercent;
+    private bool _isMuted;
+    private float _rate = PlaybackRate.Default;
+    private double _videoDisplayAspectRatio = PlaybackVideoGeometry.DefaultDisplayAspectRatio;
+    private long _knownLengthMilliseconds;
+    private long _lastPlaybackTimeMilliseconds;
+    private int _preserveTerminalPosition;
+    private int _runtimeErrorReported;
     private bool _disposed;
 
     public LibVlcPlaybackBackend(Action<Exception>? callbackExceptionHandler = null)
@@ -15,16 +25,23 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         Core.Initialize();
         _libVlc = new LibVLC(enableDebugLogs: false);
         MediaPlayer? mediaPlayer = null;
+        RealtimeAudioOutput? audioOutput = null;
 
         try
         {
             mediaPlayer = new MediaPlayer(_libVlc);
             MediaPlayer = mediaPlayer;
+            audioOutput = new RealtimeAudioOutput(OnAudioOutputFailure);
+            audioOutput.AttachTo(MediaPlayer);
+            _audioOutput = audioOutput;
+            MediaPlayer.Volume = PlaybackVolume.DefaultPercent;
+            MediaPlayer.Mute = false;
             SubscribePlayerEvents();
         }
         catch
         {
             mediaPlayer?.Dispose();
+            audioOutput?.Dispose();
             _libVlc.Dispose();
             throw;
         }
@@ -33,6 +50,8 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
     public event EventHandler<PlaybackErrorEventArgs>? ErrorOccurred;
 
     public event EventHandler? StateChanged;
+
+    public event EventHandler? PlaybackEnded;
 
     public MediaPlayer MediaPlayer { get; }
 
@@ -59,7 +78,9 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         get
         {
             ThrowIfDisposed();
-            return Math.Max(0, MediaPlayer.Length);
+            return Math.Max(
+                Math.Max(0, MediaPlayer.Length),
+                Interlocked.Read(ref _knownLengthMilliseconds));
         }
     }
 
@@ -68,13 +89,61 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         get
         {
             ThrowIfDisposed();
-            return Math.Max(0, MediaPlayer.Time);
+            if (Volatile.Read(ref _preserveTerminalPosition) != 0)
+            {
+                return Math.Max(0, Interlocked.Read(ref _lastPlaybackTimeMilliseconds));
+            }
+
+            var currentTime = Math.Max(0, MediaPlayer.Time);
+            Interlocked.Exchange(ref _lastPlaybackTimeMilliseconds, currentTime);
+            return currentTime;
+        }
+    }
+
+    public int VolumePercent
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _volumePercent;
+        }
+    }
+
+    public bool IsMuted
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _isMuted;
+        }
+    }
+
+    public float Rate
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _rate;
+        }
+    }
+
+    public double VideoDisplayAspectRatio
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _videoDisplayAspectRatio;
         }
     }
 
     public string? CurrentPath { get; private set; }
 
-    public async Task<bool> OpenAndPlayAsync(string path, CancellationToken cancellationToken = default)
+    internal RealtimeAudioDiagnostics AudioDiagnostics => _audioOutput.Diagnostics;
+
+    public async Task<bool> OpenAndPlayAsync(
+        string path,
+        PlaybackInitialState? initialState = null,
+        CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -146,6 +215,15 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         }
 
         Media? nextMedia = null;
+        var previousAudioState = new PlaybackAudioState(_volumePercent, _isMuted);
+        var nextAudioState = initialState?.AudioState ?? previousAudioState;
+        var nextAudioStateApplied = false;
+        var nextAudioStateCommitted = false;
+        var previousLengthMilliseconds = Interlocked.Read(ref _knownLengthMilliseconds);
+        var previousTimeMilliseconds = Interlocked.Read(ref _lastPlaybackTimeMilliseconds);
+        var previousPreserveTerminalPosition = Volatile.Read(ref _preserveTerminalPosition);
+        var previousRuntimeErrorReported = Volatile.Read(ref _runtimeErrorReported);
+        var nextPlaybackStateApplied = false;
         try
         {
             nextMedia = new Media(_libVlc, new Uri(fullPath));
@@ -166,9 +244,9 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
                 return false;
             }
 
-            var videoCodec = nextMedia.Tracks
-                .FirstOrDefault(track => track.TrackType == TrackType.Video)
-                .Codec;
+            var videoTrack = nextMedia.Tracks
+                .FirstOrDefault(track => track.TrackType == TrackType.Video);
+            var videoCodec = videoTrack.Codec;
             var audioCodec = nextMedia.Tracks
                 .FirstOrDefault(track => track.TrackType == TrackType.Audio)
                 .Codec;
@@ -197,6 +275,24 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
             }
 
             cancellationToken.ThrowIfCancellationRequested();
+            _volumePercent = nextAudioState.VolumePercent;
+            _isMuted = nextAudioState.IsMuted;
+            nextAudioStateApplied = true;
+            ApplyVolumeState();
+            _audioOutput.PrepareForPlayback();
+            var nextLengthMilliseconds = Math.Max(0, nextMedia.Duration);
+            var initialPosition = PlaybackPosition.ResolveInitialPosition(
+                initialState?.StartPositionMilliseconds,
+                nextLengthMilliseconds);
+            Interlocked.Exchange(ref _knownLengthMilliseconds, nextLengthMilliseconds);
+            Interlocked.Exchange(
+                ref _lastPlaybackTimeMilliseconds,
+                initialPosition is null
+                    ? 0
+                    : (long)Math.Round(initialPosition.Value * nextLengthMilliseconds));
+            Volatile.Write(ref _preserveTerminalPosition, 0);
+            Volatile.Write(ref _runtimeErrorReported, 0);
+            nextPlaybackStateApplied = true;
             if (!MediaPlayer.Play(nextMedia))
             {
                 RaiseError(new PlaybackErrorEventArgs(
@@ -208,10 +304,39 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
                 return false;
             }
 
+            var videoData = videoTrack.Data.Video;
+            var nextVideoDisplayAspectRatio = PlaybackVideoGeometry.DisplayAspectRatio(
+                videoData.Width,
+                videoData.Height,
+                videoData.SarNum,
+                videoData.SarDen,
+                SwapsVideoAxes(videoData.Orientation));
+
+            if (MediaPlayer.SetRate(PlaybackRate.Default) != 0)
+            {
+                RaiseError(new PlaybackErrorEventArgs(
+                    "playback-default-rate-rejected",
+                    "新しい動画を標準速度へ戻せませんでした。",
+                    "右クリックメニューから1.0倍を選び直してください。",
+                    "LibVLC rejected the default 1.0 playback rate after opening media.",
+                    targetPath: fullPath));
+            }
+            else
+            {
+                _rate = PlaybackRate.Default;
+            }
+
+            if (initialPosition is not null)
+            {
+                MediaPlayer.Position = (float)initialPosition.Value;
+            }
+
             var previousMedia = _currentMedia;
             _currentMedia = nextMedia;
             nextMedia = null;
             CurrentPath = fullPath;
+            _videoDisplayAspectRatio = nextVideoDisplayAspectRatio;
+            nextAudioStateCommitted = true;
             DisposeResource(previousMedia);
             return true;
         }
@@ -232,6 +357,21 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         }
         finally
         {
+            if (nextAudioStateApplied && !nextAudioStateCommitted)
+            {
+                _volumePercent = previousAudioState.VolumePercent;
+                _isMuted = previousAudioState.IsMuted;
+                ApplyVolumeState();
+            }
+
+            if (nextPlaybackStateApplied && !nextAudioStateCommitted)
+            {
+                Interlocked.Exchange(ref _knownLengthMilliseconds, previousLengthMilliseconds);
+                Interlocked.Exchange(ref _lastPlaybackTimeMilliseconds, previousTimeMilliseconds);
+                Volatile.Write(ref _preserveTerminalPosition, previousPreserveTerminalPosition);
+                Volatile.Write(ref _runtimeErrorReported, previousRuntimeErrorReported);
+            }
+
             if (nextMedia is not null)
             {
                 try
@@ -254,6 +394,7 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
     public void Play()
     {
         ThrowIfDisposed();
+        _audioOutput.PrepareForPlayback();
         MediaPlayer.Play();
     }
 
@@ -273,6 +414,50 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
     {
         ThrowIfDisposed();
         MediaPlayer.Position = (float)PlaybackPosition.Normalize(normalizedPosition);
+    }
+
+    public void SetVolumePercent(int volumePercent)
+    {
+        ThrowIfDisposed();
+        _volumePercent = PlaybackVolume.Clamp(volumePercent);
+        _audioOutput.SetVolumePercent(_volumePercent);
+    }
+
+    public void SetMuted(bool isMuted)
+    {
+        ThrowIfDisposed();
+        _isMuted = isMuted;
+        _audioOutput.SetMuted(isMuted);
+    }
+
+    public bool TrySetRate(float rate)
+    {
+        ThrowIfDisposed();
+        if (CurrentPath is null || !PlaybackRate.IsSupported(rate))
+        {
+            return false;
+        }
+
+        if (PlaybackRate.AreEqual(_rate, rate))
+        {
+            return true;
+        }
+
+        _audioOutput.PrepareForRateChange();
+        if (MediaPlayer.SetRate(rate) != 0)
+        {
+            return false;
+        }
+
+        _rate = rate;
+        RaiseSafely(StateChanged, EventArgs.Empty);
+        return true;
+    }
+
+    private void ApplyVolumeState()
+    {
+        _audioOutput.SetVolumePercent(_volumePercent);
+        _audioOutput.SetMuted(_isMuted);
     }
 
     public void Dispose()
@@ -297,6 +482,7 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         DisposeResource(_currentMedia);
         _currentMedia = null;
         DisposeResource(MediaPlayer);
+        _audioOutput.Dispose();
         DisposeResource(_libVlc);
     }
 
@@ -305,7 +491,8 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         MediaPlayer.Playing += OnStateChanged;
         MediaPlayer.Paused += OnStateChanged;
         MediaPlayer.Stopped += OnStateChanged;
-        MediaPlayer.EndReached += OnStateChanged;
+        MediaPlayer.TimeChanged += OnTimeChanged;
+        MediaPlayer.EndReached += OnPlaybackEnded;
         MediaPlayer.EncounteredError += OnEncounteredError;
     }
 
@@ -314,19 +501,121 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         MediaPlayer.Playing -= OnStateChanged;
         MediaPlayer.Paused -= OnStateChanged;
         MediaPlayer.Stopped -= OnStateChanged;
-        MediaPlayer.EndReached -= OnStateChanged;
+        MediaPlayer.TimeChanged -= OnTimeChanged;
+        MediaPlayer.EndReached -= OnPlaybackEnded;
         MediaPlayer.EncounteredError -= OnEncounteredError;
     }
 
     private void OnStateChanged(object? sender, EventArgs eventArgs) => RaiseSafely(StateChanged, EventArgs.Empty);
 
+    private void OnTimeChanged(object? sender, MediaPlayerTimeChangedEventArgs eventArgs)
+    {
+        if (!_disposed && Volatile.Read(ref _preserveTerminalPosition) == 0)
+        {
+            Interlocked.Exchange(ref _lastPlaybackTimeMilliseconds, Math.Max(0, eventArgs.Time));
+        }
+    }
+
+    private void OnPlaybackEnded(object? sender, EventArgs eventArgs)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        var lengthMilliseconds = Math.Max(
+            ReadPlayerLengthSafely(),
+            Interlocked.Read(ref _knownLengthMilliseconds));
+        var playbackTimeMilliseconds = Math.Max(
+            ReadPlayerTimeSafely(),
+            Interlocked.Read(ref _lastPlaybackTimeMilliseconds));
+        if (PlaybackCompletion.IsPrematureEnd(playbackTimeMilliseconds, lengthMilliseconds))
+        {
+            ReportRuntimeError(new PlaybackErrorEventArgs(
+                "playback-ended-early",
+                "動画ファイルの破損により、再生を最後まで続けられませんでした。",
+                "別の動画を開くか、元のファイルを確認してください。",
+                $"Playback ended at {playbackTimeMilliseconds} ms before the declared " +
+                $"length of {lengthMilliseconds} ms.",
+                targetPath: CurrentPath),
+                playbackTimeMilliseconds);
+            return;
+        }
+
+        RaiseSafely(StateChanged, EventArgs.Empty);
+        if (Volatile.Read(ref _runtimeErrorReported) == 0)
+        {
+            RaiseSafely(PlaybackEnded, EventArgs.Empty);
+        }
+    }
+
     private void OnEncounteredError(object? sender, EventArgs eventArgs) =>
-        RaiseError(new PlaybackErrorEventArgs(
+        ReportRuntimeError(new PlaybackErrorEventArgs(
             "playback-native-error",
             "動画の再生中に問題が発生しました。",
             "別の動画を開くか、ファイルの状態を確認してください。",
             "LibVLC raised the MediaPlayer.EncounteredError event.",
             targetPath: CurrentPath));
+
+    private void OnAudioOutputFailure(Exception exception) =>
+        RaiseError(new PlaybackErrorEventArgs(
+            "playback-audio-output-error",
+            "音声の再生中に問題が発生しました。",
+            "Windowsの音声出力を確認して、アプリを再起動してください。",
+            exception.Message,
+            exception,
+            CurrentPath));
+
+    private void ReportRuntimeError(
+        PlaybackErrorEventArgs eventArgs,
+        long? playbackTimeMilliseconds = null)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (Interlocked.Exchange(ref _runtimeErrorReported, 1) != 0)
+        {
+            return;
+        }
+
+        var terminalTime = Math.Max(
+            0,
+            playbackTimeMilliseconds ?? Math.Max(
+                ReadPlayerTimeSafely(),
+                Interlocked.Read(ref _lastPlaybackTimeMilliseconds)));
+        Interlocked.Exchange(ref _lastPlaybackTimeMilliseconds, terminalTime);
+        Volatile.Write(ref _preserveTerminalPosition, 1);
+        RaiseSafely(StateChanged, EventArgs.Empty);
+        RaiseError(eventArgs);
+    }
+
+    private long ReadPlayerTimeSafely()
+    {
+        try
+        {
+            return Math.Max(0, MediaPlayer.Time);
+        }
+        catch (Exception exception)
+        {
+            ReportCallbackException(exception);
+            return Math.Max(0, Interlocked.Read(ref _lastPlaybackTimeMilliseconds));
+        }
+    }
+
+    private long ReadPlayerLengthSafely()
+    {
+        try
+        {
+            return Math.Max(0, MediaPlayer.Length);
+        }
+        catch (Exception exception)
+        {
+            ReportCallbackException(exception);
+            return Math.Max(0, Interlocked.Read(ref _knownLengthMilliseconds));
+        }
+    }
 
     private void RaiseError(PlaybackErrorEventArgs eventArgs) => RaiseSafely(ErrorOccurred, eventArgs);
 
@@ -334,16 +623,18 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
     {
         Media? stagingMedia = null;
         MediaPlayer? stagingPlayer = null;
+        DiscardingVideoSink? videoSink = null;
 
         try
         {
             stagingMedia = new Media(_libVlc, new Uri(path));
             stagingMedia.AddOption(":aout=dummy");
-            stagingMedia.AddOption(":vout=dummy");
             stagingPlayer = new MediaPlayer(_libVlc)
             {
                 Mute = true,
             };
+            videoSink = new DiscardingVideoSink(ReportCallbackException);
+            videoSink.Attach(stagingPlayer);
 
             if (!stagingPlayer.Play(stagingMedia))
             {
@@ -382,8 +673,69 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
                 await Task.Delay(150, CancellationToken.None).ConfigureAwait(false);
             }
 
-            DisposeResource(stagingMedia);
             DisposeResource(stagingPlayer);
+            videoSink?.Dispose();
+            DisposeResource(stagingMedia);
+        }
+    }
+
+    private sealed class DiscardingVideoSink : IDisposable
+    {
+        private readonly IntPtr _buffer = Marshal.AllocHGlobal(sizeof(int));
+        private readonly Action<Exception> _exceptionHandler;
+        private readonly MediaPlayer.LibVLCVideoLockCb _lockCallback;
+        private readonly MediaPlayer.LibVLCVideoUnlockCb _unlockCallback;
+        private readonly MediaPlayer.LibVLCVideoDisplayCb _displayCallback;
+        private bool _disposed;
+
+        public DiscardingVideoSink(Action<Exception> exceptionHandler)
+        {
+            _exceptionHandler = exceptionHandler;
+            _lockCallback = Lock;
+            _unlockCallback = static (_, _, _) => { };
+            _displayCallback = static (_, _) => { };
+        }
+
+        public void Attach(MediaPlayer player)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            player.SetVideoCallbacks(_lockCallback, _unlockCallback, _displayCallback);
+            player.SetVideoFormat("RV32", 1, 1, sizeof(int));
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            Marshal.FreeHGlobal(_buffer);
+        }
+
+        private IntPtr Lock(IntPtr opaque, IntPtr planes)
+        {
+            try
+            {
+                if (!_disposed)
+                {
+                    Marshal.WriteIntPtr(planes, _buffer);
+                }
+            }
+            catch (Exception exception)
+            {
+                try
+                {
+                    _exceptionHandler(exception);
+                }
+                catch
+                {
+                    // Managed exceptions must never cross the native LibVLC callback boundary.
+                }
+            }
+
+            return IntPtr.Zero;
         }
     }
 
@@ -410,6 +762,12 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
 
         return new string(characters).TrimEnd('\0');
     }
+
+    private static bool SwapsVideoAxes(VideoOrientation orientation) => orientation is
+        VideoOrientation.LeftTop or
+        VideoOrientation.LeftBottom or
+        VideoOrientation.RightTop or
+        VideoOrientation.RightBottom;
 
     private void RaiseSafely(EventHandler? handlers, EventArgs eventArgs)
     {

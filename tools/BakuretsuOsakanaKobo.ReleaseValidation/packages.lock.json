@@ -15,6 +15,19 @@
           "LibVLCSharp": "3.10.0"
         }
       },
+      "NAudio.Core": {
+        "type": "Transitive",
+        "resolved": "2.3.0",
+        "contentHash": "jMd7r6dB6tAtXhOYL58ntPqwERNm1/Rhw5MKOIYvsnXzuX+PTGsa2VMam6n0npZYSwlSidKa4GAm4bFcXFUlcg=="
+      },
+      "NAudio.Wasapi": {
+        "type": "Transitive",
+        "resolved": "2.3.0",
+        "contentHash": "y5K2BxrLnvohgu5znzg5wRsai3YcuNXfrpo68i7PmCQqpK5MC/R24e5aO3OyN/XhfRr12e0QYV0OnUWEHi5SzA==",
+        "dependencies": {
+          "NAudio.Core": "2.3.0"
+        }
+      },
       "VideoLAN.LibVLC.Windows": {
         "type": "Transitive",
         "resolved": "3.0.23.1",
@@ -23,8 +36,8 @@
       "BakuretsuOsakanaKobo": {
         "type": "Project",
         "dependencies": {
-          "BakuretsuOsakanaKobo.Infrastructure": "[1.0.0, )",
-          "BakuretsuOsakanaKobo.Playback": "[1.0.0, )",
+          "BakuretsuOsakanaKobo.Infrastructure": "[0.1.0, )",
+          "BakuretsuOsakanaKobo.Playback": "[0.1.0, )",
           "LibVLCSharp.WPF": "[3.10.0, )",
           "VideoLAN.LibVLC.Windows": "[3.0.23.1, )"
         }
@@ -35,7 +48,9 @@
       "bakuretsuosakanakobo.playback": {
         "type": "Project",
         "dependencies": {
-          "LibVLCSharp": "[3.10.0, )"
+          "LibVLCSharp": "[3.10.0, )",
+          "NAudio.Core": "[2.3.0, )",
+          "NAudio.Wasapi": "[2.3.0, )"
         }
       }
     },

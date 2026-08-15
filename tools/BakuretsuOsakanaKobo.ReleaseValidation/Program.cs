@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -181,7 +182,9 @@ internal static class Program
                 var videoRegion = (FrameworkElement)window.FindName("VideoSurface");
                 var playbackRateText = (TextBlock)window.FindName("PlaybackRateText");
                 Ensure(!volumeSlider.IsEnabled && !muteButton.IsEnabled, "Volume controls must start disabled.");
+                Ensure(seekSlider.ToolTip is null, "The playback-position slider displayed an initial tooltip.");
                 var openMetrics = await MeasureOpenAsync(window, seekSlider, backend, args[0]);
+                Ensure(seekSlider.ToolTip is null, "The playback-position slider displayed a tooltip during playback.");
                 var lengthMilliseconds = backend.LengthMilliseconds;
                 if (validateThumbnailHover)
                 {
@@ -2287,6 +2290,14 @@ internal static class Program
         var fullscreenMenuItem = (MenuItem)window.FindName("FullscreenMenuItem");
         var mainMenu = (Menu)window.FindName("MainMenu");
         var playbackControls = (FrameworkElement)window.FindName("PlaybackControls");
+        var expectedTextColor = ReadSolidColor(
+            (Brush)Application.Current.FindResource("TextBrush"),
+            "TextBrush");
+        var normalPlaybackControlColors = EnsurePlaybackControlsUseTextColor(
+            window,
+            playbackControls,
+            expectedTextColor,
+            "normal layout");
         Ensure(NativeMethods.GetCursorPos(out var originalCursor), "Could not read the current cursor position.");
 
         window.Topmost = true;
@@ -2311,6 +2322,17 @@ internal static class Program
             Ensure(mainMenu.Visibility == Visibility.Collapsed, "Fullscreen did not hide the main menu.");
             Ensure(Grid.GetRow(videoRegion) == 0 && Grid.GetRowSpan(videoRegion) == 4, "Video did not fill the fullscreen layout.");
             Ensure(playbackControls.Visibility == Visibility.Visible, "Playback controls were not visible on fullscreen entry.");
+            var fullscreenPlaybackControlColors = EnsurePlaybackControlsUseTextColor(
+                window,
+                playbackControls,
+                expectedTextColor,
+                "fullscreen overlay");
+            Ensure(
+                normalPlaybackControlColors.Count == fullscreenPlaybackControlColors.Count &&
+                normalPlaybackControlColors.All(pair =>
+                    fullscreenPlaybackControlColors.TryGetValue(pair.Key, out var fullscreenColor) &&
+                    string.Equals(pair.Value, fullscreenColor, StringComparison.Ordinal)),
+                "Playback control foreground colors changed between the normal layout and fullscreen overlay.");
             Ensure(
                 NativeMethods.MonitorFromWindow(windowHandle, NativeMethods.MonitorDefaultToNearest) == initialMonitor,
                 "Fullscreen moved to a different monitor.");
@@ -2487,6 +2509,9 @@ internal static class Program
                 mouseMovementShowedControls = true,
                 controlsHoverPreventedHide = true,
                 contextMenuPreventedHide = true,
+                expectedTextColor = expectedTextColor.ToString(),
+                normalPlaybackControlColors,
+                fullscreenPlaybackControlColors,
                 displayValidations,
                 restoredState = window.WindowState.ToString(),
                 restoredBounds = window.RestoreBounds,
@@ -2629,6 +2654,39 @@ internal static class Program
         bounds.Right,
         bounds.Bottom,
     };
+
+    private static IReadOnlyDictionary<string, string> EnsurePlaybackControlsUseTextColor(
+        Window window,
+        FrameworkElement playbackControls,
+        Color expectedColor,
+        string presentation)
+    {
+        var localForeground = playbackControls.ReadLocalValue(TextElement.ForegroundProperty);
+        Ensure(
+            localForeground is SolidColorBrush { Color: var localColor } && localColor == expectedColor,
+            $"Playback controls do not declare the fixed dark-theme text color in the {presentation}.");
+
+        var observed = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["playPause"] = ReadSolidColor(((Button)window.FindName("PlayPauseButton")).Foreground, "PlayPauseButton.Foreground").ToString(),
+            ["time"] = ReadSolidColor(((TextBlock)window.FindName("TimeText")).Foreground, "TimeText.Foreground").ToString(),
+            ["mute"] = ReadSolidColor(((Button)window.FindName("MuteButton")).Foreground, "MuteButton.Foreground").ToString(),
+            ["volume"] = ReadSolidColor(((TextBlock)window.FindName("VolumeText")).Foreground, "VolumeText.Foreground").ToString(),
+            ["rate"] = ReadSolidColor(((TextBlock)window.FindName("PlaybackRateText")).Foreground, "PlaybackRateText.Foreground").ToString(),
+        };
+
+        Ensure(
+            new[] { observed["time"], observed["volume"], observed["rate"] }
+                .All(color => string.Equals(color, expectedColor.ToString(), StringComparison.Ordinal)),
+            $"Playback control text did not use the fixed dark-theme color in the {presentation}.");
+        return observed;
+    }
+
+    private static Color ReadSolidColor(Brush brush, string name)
+    {
+        Ensure(brush is SolidColorBrush, $"{name} was not a solid color brush.");
+        return ((SolidColorBrush)brush).Color;
+    }
 
     private static void MoveCursor(Point point)
     {

@@ -188,6 +188,7 @@
                 Background="{StaticResource PanelBrush}"
                 BorderBrush="{StaticResource BorderBrush}"
                 BorderThickness="0,1,0,0"
+                TextElement.Foreground="{StaticResource TextBrush}"
                 PreviewKeyDown="Window_OnPreviewKeyDown"
                 MouseEnter="PlaybackControls_OnMouseEnter"
                 MouseLeave="PlaybackControls_OnMouseLeave">
@@ -227,8 +228,6 @@
                             LargeChange="0.05"
                             IsMoveToPointEnabled="True"
                             IsEnabled="False"
-                            ToolTip="動画を開くとシークできます"
-                            ToolTipService.ShowOnDisabled="True"
                             ValueChanged="SeekSlider_OnValueChanged"
                             SizeChanged="SeekSlider_OnSizeChanged"
                             MouseMove="SeekSlider_OnMouseMove"

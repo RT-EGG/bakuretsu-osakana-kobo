@@ -1610,9 +1610,6 @@ public partial class MainWindow : Window
             backend?.LengthMilliseconds ?? 0);
 
         SeekSlider.IsEnabled = presentation.IsSeekEnabled && !_hasPlaybackError;
-        SeekSlider.ToolTip = _hasPlaybackError
-            ? "再生エラーのためシークできません"
-            : presentation.SeekToolTip;
         if (!presentation.IsSeekEnabled)
         {
             CloseSeekThumbnail();

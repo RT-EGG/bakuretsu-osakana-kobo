@@ -61,7 +61,7 @@
             </Grid.ColumnDefinitions>
             <Slider x:Name="PreviewWidthSlider"
                     VerticalAlignment="Center"
-                    Minimum="10"
+                    Minimum="5"
                     Maximum="30"
                     TickFrequency="1"
                     IsSnapToTickEnabled="True"

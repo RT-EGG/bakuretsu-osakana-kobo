@@ -6,7 +6,9 @@ namespace BakuretsuOsakanaKobo.App.Tests;
 public sealed class SeekUiGeometryTests
 {
     [Theory]
-    [InlineData(720, 10, 120)]
+    [InlineData(720, 5, 60)]
+    [InlineData(1200, 5, 60)]
+    [InlineData(1000, 10, 100)]
     [InlineData(1000, 15, 150)]
     [InlineData(2000, 30, 320)]
     public void PreviewWidthUsesWindowPercentageAndPixelLimits(

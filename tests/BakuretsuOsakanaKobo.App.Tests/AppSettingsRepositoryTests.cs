@@ -19,6 +19,7 @@ public sealed class AppSettingsRepositoryTests
     }
 
     [Theory]
+    [InlineData(5)]
     [InlineData(10)]
     [InlineData(15)]
     [InlineData(30)]
@@ -109,8 +110,8 @@ public sealed class AppSettingsRepositoryTests
     }
 
     [Theory]
-    [InlineData(9)]
-    [InlineData(10.5)]
+    [InlineData(4)]
+    [InlineData(5.5)]
     [InlineData(31)]
     public async Task SetThumbnailSettingsAsync_RejectsInvalidPreviewWidth(double percent)
     {

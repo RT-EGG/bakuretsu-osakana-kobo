@@ -20,11 +20,11 @@ public sealed class AppSettings
 
 public static class ThumbnailPreviewSize
 {
-    public const double MinimumPercent = 10;
+    public const double MinimumPercent = 5;
     public const double MaximumPercent = 30;
     public const double StepPercent = 1;
     public const double DefaultPercent = 15;
-    public const double MinimumWidth = 120;
+    public const double MinimumWidth = 60;
     public const double MaximumWidth = 320;
 
     public static bool IsValid(double percent) =>

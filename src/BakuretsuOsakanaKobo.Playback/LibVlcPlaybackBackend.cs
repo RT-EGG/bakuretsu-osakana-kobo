@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using LibVLCSharp.Shared;
 
 namespace BakuretsuOsakanaKobo.Playback;
@@ -603,16 +604,18 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
     {
         Media? stagingMedia = null;
         MediaPlayer? stagingPlayer = null;
+        DiscardingVideoSink? videoSink = null;
 
         try
         {
             stagingMedia = new Media(_libVlc, new Uri(path));
             stagingMedia.AddOption(":aout=dummy");
-            stagingMedia.AddOption(":vout=dummy");
             stagingPlayer = new MediaPlayer(_libVlc)
             {
                 Mute = true,
             };
+            videoSink = new DiscardingVideoSink(ReportCallbackException);
+            videoSink.Attach(stagingPlayer);
 
             if (!stagingPlayer.Play(stagingMedia))
             {
@@ -651,8 +654,69 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
                 await Task.Delay(150, CancellationToken.None).ConfigureAwait(false);
             }
 
-            DisposeResource(stagingMedia);
             DisposeResource(stagingPlayer);
+            videoSink?.Dispose();
+            DisposeResource(stagingMedia);
+        }
+    }
+
+    private sealed class DiscardingVideoSink : IDisposable
+    {
+        private readonly IntPtr _buffer = Marshal.AllocHGlobal(sizeof(int));
+        private readonly Action<Exception> _exceptionHandler;
+        private readonly MediaPlayer.LibVLCVideoLockCb _lockCallback;
+        private readonly MediaPlayer.LibVLCVideoUnlockCb _unlockCallback;
+        private readonly MediaPlayer.LibVLCVideoDisplayCb _displayCallback;
+        private bool _disposed;
+
+        public DiscardingVideoSink(Action<Exception> exceptionHandler)
+        {
+            _exceptionHandler = exceptionHandler;
+            _lockCallback = Lock;
+            _unlockCallback = static (_, _, _) => { };
+            _displayCallback = static (_, _) => { };
+        }
+
+        public void Attach(MediaPlayer player)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            player.SetVideoCallbacks(_lockCallback, _unlockCallback, _displayCallback);
+            player.SetVideoFormat("RV32", 1, 1, sizeof(int));
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            Marshal.FreeHGlobal(_buffer);
+        }
+
+        private IntPtr Lock(IntPtr opaque, IntPtr planes)
+        {
+            try
+            {
+                if (!_disposed)
+                {
+                    Marshal.WriteIntPtr(planes, _buffer);
+                }
+            }
+            catch (Exception exception)
+            {
+                try
+                {
+                    _exceptionHandler(exception);
+                }
+                catch
+                {
+                    // Managed exceptions must never cross the native LibVLC callback boundary.
+                }
+            }
+
+            return IntPtr.Zero;
         }
     }
 

@@ -330,7 +330,13 @@ internal static class Program
                     videoSurface,
                     backend);
                 var audibleValidation = Environment.GetEnvironmentVariable("BOK_AUDIBLE_VOLUME_VALIDATION") == "1"
-                    ? await ValidateAudibleVolumeAsync(backend)
+                    ? await ValidateAudibleVolumeAsync(
+                        backend,
+                        int.TryParse(
+                            Environment.GetEnvironmentVariable("BOK_AUDIBLE_VOLUME_PERCENT"),
+                            out var audibleVolumePercent)
+                            ? audibleVolumePercent
+                            : PlaybackVolume.MaximumPercent)
                     : null;
 
                 var report = new
@@ -1763,8 +1769,14 @@ internal static class Program
         return diagnostics;
     }
 
-    private static async Task<object> ValidateAudibleVolumeAsync(LibVlcPlaybackBackend backend)
+    private static async Task<object> ValidateAudibleVolumeAsync(
+        LibVlcPlaybackBackend backend,
+        int volumePercent)
     {
+        Ensure(
+            volumePercent is >= 1 and <= PlaybackVolume.MaximumPercent,
+            "Audible validation volume must be 1 through " +
+            $"{PlaybackVolume.MaximumPercent} percent; current value is {volumePercent}.");
         using var enumerator = new MMDeviceEnumerator();
         using var endpoint = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
         var endpointVolume = endpoint.AudioEndpointVolume.MasterVolumeLevelScalar;
@@ -1774,7 +1786,7 @@ internal static class Program
             endpointVolume <= 0.5 + 0.000001,
             $"Audible validation requires endpoint volume at 50% or lower; current value is {endpointVolume:P1}.");
 
-        backend.SetVolumePercent(PlaybackVolume.MaximumPercent);
+        backend.SetVolumePercent(volumePercent);
         try
         {
             backend.SetMuted(false);
@@ -1796,7 +1808,7 @@ internal static class Program
         return new
         {
             durationSeconds = 3,
-            volumePercent = PlaybackVolume.MaximumPercent,
+            volumePercent,
             endpointVolumePercent = endpointVolume * 100,
             peak = diagnostics.Peak,
             ceiling,

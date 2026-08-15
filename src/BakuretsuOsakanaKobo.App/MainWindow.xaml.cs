@@ -31,6 +31,10 @@ public partial class MainWindow : Window
 
     internal bool IsFullscreen => _isFullscreen;
 
+    internal double ThumbnailIntervalPercent => _thumbnailIntervalPercent;
+
+    internal ThumbnailGenerationSession? ThumbnailSession => _thumbnailSession;
+
     private readonly DispatcherTimer _playbackTimelineTimer;
     private readonly DispatcherTimer _videoProfileSaveTimer;
     private readonly DispatcherTimer _temporaryPlaybackRateTimer;
@@ -44,6 +48,7 @@ public partial class MainWindow : Window
     private VideoProfileRepository? _videoProfiles;
     private RecentFileRepository? _recentFiles;
     private PlaylistRepository? _playlist;
+    private AppSettingsRepository? _appSettings;
     private PlaylistWindow? _playlistWindow;
     private CancellationTokenSource? _openCancellation;
     private Task? _openTask;
@@ -58,6 +63,9 @@ public partial class MainWindow : Window
     private Task? _recentFileMutationTask;
     private Task? _playlistMutationTask;
     private Task? _playlistAdvanceTask;
+    private Task<JsonSaveResult>? _appSettingsMutationTask;
+    private double _thumbnailIntervalPercent = ThumbnailGenerationInterval.DefaultPercent;
+    private ThumbnailGenerationSession? _thumbnailSession;
     private int? _playlistCurrentIndex;
     private readonly HashSet<int> _playlistLoadErrorIndices = [];
     private int _isOpeningPlaylistCandidate;
@@ -109,7 +117,8 @@ public partial class MainWindow : Window
         IPlaybackBackend? playbackBackend,
         VideoProfileRepository? videoProfiles = null,
         RecentFileRepository? recentFiles = null,
-        PlaylistRepository? playlist = null)
+        PlaylistRepository? playlist = null,
+        AppSettingsRepository? appSettings = null)
     {
         _paths = paths;
         _errorReporter = errorReporter;
@@ -117,7 +126,11 @@ public partial class MainWindow : Window
         _videoProfiles = videoProfiles;
         _recentFiles = recentFiles;
         _playlist = playlist;
+        _appSettings = appSettings;
+        _thumbnailIntervalPercent = appSettings?.GetSnapshot().ThumbnailIntervalPercent ??
+                                    ThumbnailGenerationInterval.DefaultPercent;
         OpenVideoMenuItem.IsEnabled = playbackBackend is not null;
+        ThumbnailSettingsMenuItem.IsEnabled = appSettings is not null;
         RebuildRecentFilesMenu();
 
         if (playbackBackend is LibVlcPlaybackBackend libVlcBackend)
@@ -245,6 +258,75 @@ public partial class MainWindow : Window
                 eventArgs.Handled = true;
                 await RunRecentFileMutationAsync(repository => repository.ClearAsync());
                 break;
+        }
+    }
+
+    private async void ThumbnailSettingsMenuItem_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        var appSettings = _appSettings;
+        if (appSettings is null || _appSettingsMutationTask is not null || _closeRequested)
+        {
+            return;
+        }
+
+        var dialog = new ThumbnailSettingsWindow(_thumbnailIntervalPercent)
+        {
+            Owner = this,
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        ThumbnailSettingsMenuItem.IsEnabled = false;
+        Task<JsonSaveResult> mutationTask;
+        try
+        {
+            mutationTask = appSettings.SetThumbnailIntervalPercentAsync(
+                dialog.SelectedIntervalPercent);
+            _thumbnailIntervalPercent = appSettings.GetSnapshot().ThumbnailIntervalPercent;
+        }
+        catch (Exception exception)
+        {
+            ReportAppSettingsSaveFailure(exception, appSettings.FilePath);
+            ThumbnailSettingsMenuItem.IsEnabled = true;
+            return;
+        }
+
+        _appSettingsMutationTask = mutationTask;
+        try
+        {
+            var result = await mutationTask;
+            if (result.Success)
+            {
+                ShowNotification(new UserNotification(
+                    UserNotificationSeverity.Information,
+                    $"サムネイル生成間隔を {_thumbnailIntervalPercent:0.00}% に変更しました。",
+                    "次に開く動画から適用します。"));
+            }
+            else
+            {
+                ReportAppSettingsSaveFailure(
+                    result.Exception ?? new IOException(result.ErrorMessage),
+                    appSettings.FilePath);
+            }
+        }
+        catch (Exception exception)
+        {
+            _thumbnailIntervalPercent = appSettings.GetSnapshot().ThumbnailIntervalPercent;
+            ReportAppSettingsSaveFailure(exception, appSettings.FilePath);
+        }
+        finally
+        {
+            if (ReferenceEquals(_appSettingsMutationTask, mutationTask))
+            {
+                _appSettingsMutationTask = null;
+            }
+
+            if (!_closeRequested)
+            {
+                ThumbnailSettingsMenuItem.IsEnabled = true;
+            }
         }
     }
 
@@ -813,6 +895,9 @@ public partial class MainWindow : Window
                 EmptyStatePanel.Visibility = Visibility.Collapsed;
                 Title = $"{Path.GetFileName(path)} - {ApplicationInfo.DisplayName}";
                 NotificationBorder.Visibility = Visibility.Collapsed;
+                _thumbnailSession = ThumbnailGenerationSession.Create(
+                    path,
+                    _thumbnailIntervalPercent);
                 _playlistWindow?.UpdateCurrentMedia(path);
                 await RecordRecentFileAsync(path);
             }
@@ -1060,6 +1145,7 @@ public partial class MainWindow : Window
                 PlaybackRateMenuItem.IsEnabled = false;
                 RecentFilesMenuItem.IsEnabled = false;
                 PlaylistMenuItem.IsEnabled = false;
+                ThumbnailSettingsMenuItem.IsEnabled = false;
                 _playlistWindow?.DisablePersistenceControls();
                 VideoContextMenu.IsOpen = false;
                 _openCancellation?.Cancel();
@@ -1068,7 +1154,8 @@ public partial class MainWindow : Window
                     _openTask,
                     _recentFileMutationTask,
                     _playlistMutationTask,
-                    _playlistAdvanceTask);
+                    _playlistAdvanceTask,
+                    _appSettingsMutationTask);
             }
 
             return;
@@ -1121,6 +1208,9 @@ public partial class MainWindow : Window
         _recentFiles = null;
         _playlist?.Dispose();
         _playlist = null;
+        _appSettings?.Dispose();
+        _appSettings = null;
+        _thumbnailSession = null;
         base.OnClosed(e);
     }
 
@@ -1306,11 +1396,23 @@ public partial class MainWindow : Window
             exception,
             targetPath);
 
+    private void ReportAppSettingsSaveFailure(Exception exception, string targetPath) =>
+        _errorReporter?.Report(
+            new UserNotification(
+                UserNotificationSeverity.Warning,
+                "サムネイル設定を保存できません。",
+                "変更は現在の実行中だけ保持されます。アプリの配置先に書き込み権限があるか確認してください。"),
+            "settings-save-failed",
+            exception.Message,
+            exception,
+            targetPath);
+
     private async Task CloseAfterPendingWorkCompletesAsync(
         Task? openTask,
         Task? recentFileMutationTask,
         Task? playlistMutationTask,
-        Task? playlistAdvanceTask)
+        Task? playlistAdvanceTask,
+        Task? appSettingsMutationTask)
     {
         // OnClosing must return before Close is requested again when there is no pending work.
         await Dispatcher.Yield(DispatcherPriority.Background);
@@ -1319,6 +1421,7 @@ public partial class MainWindow : Window
         await IgnoreReportedPendingFailureAsync(recentFileMutationTask);
         await IgnoreReportedPendingFailureAsync(playlistMutationTask);
         await IgnoreReportedPendingFailureAsync(playlistAdvanceTask);
+        await IgnoreReportedPendingFailureAsync(appSettingsMutationTask);
 
         try
         {

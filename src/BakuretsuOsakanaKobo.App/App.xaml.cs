@@ -60,6 +60,7 @@ public partial class App : Application
         var window = new MainWindow();
         MainWindow = window;
         _errorReporter = new ErrorReporter(_diagnosticLog, new MainWindowNotificationSink(window));
+        var appSettings = await InitializeAppSettingsAsync(paths, _errorReporter);
         var videoProfiles = await InitializeVideoProfilesAsync(paths, _errorReporter);
         var recentFiles = await InitializeRecentFilesAsync(paths, _errorReporter);
         var playlist = await InitializePlaylistAsync(paths, _errorReporter);
@@ -80,7 +81,14 @@ public partial class App : Application
                 exception);
         }
 
-        window.ConfigureServices(paths, _errorReporter, playbackBackend, videoProfiles, recentFiles, playlist);
+        window.ConfigureServices(
+            paths,
+            _errorReporter,
+            playbackBackend,
+            videoProfiles,
+            recentFiles,
+            playlist,
+            appSettings);
         _singleInstanceCoordinator.Diagnostic += SingleInstanceCoordinator_OnDiagnostic;
         RegisterGlobalErrorHandlers();
         window.Show();
@@ -111,22 +119,6 @@ public partial class App : Application
                 paths.LogsDirectory);
         }
 
-        try
-        {
-            await InitializeSettingsAsync(paths, _errorReporter);
-        }
-        catch (Exception exception)
-        {
-            _errorReporter.Report(
-                new UserNotification(
-                    UserNotificationSeverity.Error,
-                    "設定の初期化を完了できませんでした。",
-                    "アプリは初期設定で続行します。"),
-                "settings-initialization-failed",
-                exception.Message,
-                exception,
-                paths.SettingsFilePath);
-        }
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -217,45 +209,58 @@ public partial class App : Application
             eventArgs.Exception));
     }
 
-    private static async Task InitializeSettingsAsync(
+    private static async Task<AppSettingsRepository?> InitializeAppSettingsAsync(
         PortableDataPaths paths,
         ErrorReporter errorReporter)
     {
-        var settingsStore = new PortableJsonStore<AppSettings>(
-            paths.SettingsFilePath,
-            () => new AppSettings(),
-            AppSettings.IsValid);
-        var loadResult = await settingsStore.LoadOrDefaultAsync();
-
-        if (loadResult.Warning is not null)
+        var repository = new AppSettingsRepository(paths.SettingsFilePath);
+        try
         {
+            var loadResult = await repository.LoadAsync();
+            if (loadResult.Warning is not null)
+            {
+                errorReporter.Report(
+                    new UserNotification(
+                        UserNotificationSeverity.Warning,
+                        "設定ファイルを読み込めなかったため、初期設定で起動しました。",
+                        "必要な設定をもう一度指定してください。"),
+                    "settings-load-recovered",
+                    loadResult.Warning,
+                    targetPath: paths.SettingsFilePath);
+            }
+
+            if (loadResult.UsedDefault)
+            {
+                var saveResult = await repository.SaveAsync();
+                if (!saveResult.Success)
+                {
+                    errorReporter.Report(
+                        new UserNotification(
+                            UserNotificationSeverity.Warning,
+                            "設定を保存できません。",
+                            "再生は続行できます。アプリの配置先に書き込み権限があるか確認してください。"),
+                        "settings-save-failed",
+                        saveResult.ErrorMessage ?? "The settings save failed.",
+                        saveResult.Exception,
+                        paths.SettingsFilePath);
+                }
+            }
+
+            return repository;
+        }
+        catch (Exception exception)
+        {
+            repository.Dispose();
             errorReporter.Report(
                 new UserNotification(
                     UserNotificationSeverity.Warning,
-                    "設定ファイルを読み込めなかったため、初期設定で起動しました。",
-                    "必要な設定をもう一度指定してください。"),
-                "settings-load-recovered",
-                loadResult.Warning,
-                targetPath: paths.SettingsFilePath);
-        }
-
-        if (!loadResult.UsedDefault)
-        {
-            return;
-        }
-
-        var saveResult = await settingsStore.SaveAsync(loadResult.Value);
-        if (!saveResult.Success)
-        {
-            errorReporter.Report(
-                new UserNotification(
-                    UserNotificationSeverity.Warning,
-                    "設定を保存できません。",
-                    "再生は続行できます。アプリの配置先に書き込み権限があるか確認してください。"),
-                "settings-save-failed",
-                saveResult.ErrorMessage ?? "The settings save failed.",
-                saveResult.Exception,
+                    "設定の初期化を完了できませんでした。",
+                    "アプリは初期設定で続行します。"),
+                "settings-initialization-failed",
+                exception.Message,
+                exception,
                 paths.SettingsFilePath);
+            return null;
         }
     }
 

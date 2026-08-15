@@ -48,6 +48,11 @@
                           IsCheckable="True"
                           Checked="PlaylistMenuItem_OnCheckedChanged"
                           Unchecked="PlaylistMenuItem_OnCheckedChanged" />
+                <Separator />
+                <MenuItem x:Name="ThumbnailSettingsMenuItem"
+                          Header="サムネイル設定(_T)…"
+                          IsEnabled="False"
+                          Click="ThumbnailSettingsMenuItem_OnClick" />
             </MenuItem>
         </Menu>
 

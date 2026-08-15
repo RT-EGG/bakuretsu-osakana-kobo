@@ -38,6 +38,7 @@ internal static class Program
         var validateFileDrop = Environment.GetEnvironmentVariable("BOK_FILE_DROP_VALIDATION") == "1";
         var validateRecentFiles = Environment.GetEnvironmentVariable("BOK_RECENT_FILES_VALIDATION") == "1";
         var validatePlaylist = Environment.GetEnvironmentVariable("BOK_PLAYLIST_VALIDATION") == "1";
+        var validateThumbnailSettings = Environment.GetEnvironmentVariable("BOK_THUMBNAIL_SETTINGS_VALIDATION") == "1";
         var profileFilePath = $"{Path.GetFullPath(args[1])}.video-profiles.json";
         VideoProfileRepository? videoProfiles = null;
         if (validateProfiles || validateStartPositions)
@@ -112,6 +113,16 @@ internal static class Program
             Ensure(saveLoop.Success, saveLoop.ErrorMessage ?? "Initial playlist loop save failed.");
         }
 
+        var appSettingsFilePath = $"{Path.GetFullPath(args[1])}.settings.json";
+        AppSettingsRepository? appSettings = null;
+        if (validateThumbnailSettings)
+        {
+            appSettings = new AppSettingsRepository(appSettingsFilePath);
+            appSettings.LoadAsync().GetAwaiter().GetResult();
+            var saveSettings = appSettings.SetThumbnailIntervalPercentAsync(1.25).GetAwaiter().GetResult();
+            Ensure(saveSettings.Success, saveSettings.ErrorMessage ?? "Initial thumbnail settings save failed.");
+        }
+
         var application = new Application();
         AddProductResources(application.Resources);
         var window = new MainWindow
@@ -129,7 +140,8 @@ internal static class Program
             backend,
             videoProfiles,
             recentFiles,
-            playlist);
+            playlist,
+            appSettings);
 
         var exitCode = 1;
         ProfileDelayValidation? profileDelayValidation = null;
@@ -137,6 +149,7 @@ internal static class Program
         FileDropValidation? fileDropValidation = null;
         RecentFileValidation? recentFileValidation = null;
         PlaylistValidation? playlistValidation = null;
+        ThumbnailSettingsValidation? thumbnailSettingsValidation = null;
         window.Loaded += async (_, _) =>
         {
             var windowLoadedMilliseconds = processClock.Elapsed.TotalMilliseconds;
@@ -153,6 +166,17 @@ internal static class Program
                 Ensure(!volumeSlider.IsEnabled && !muteButton.IsEnabled, "Volume controls must start disabled.");
                 var openMetrics = await MeasureOpenAsync(window, seekSlider, backend, args[0]);
                 var lengthMilliseconds = backend.LengthMilliseconds;
+                if (validateThumbnailSettings)
+                {
+                    thumbnailSettingsValidation = await ValidateThumbnailSettingsAsync(
+                        window,
+                        backend,
+                        appSettings!,
+                        args[0]);
+                    exitCode = 0;
+                    return;
+                }
+
                 if (validatePlaylist)
                 {
                     playlistValidation = await ValidatePlaylistAsync(
@@ -433,7 +457,100 @@ internal static class Program
             Console.WriteLine(JsonSerializer.Serialize(report));
         }
 
+        if (validateThumbnailSettings && exitCode == 0)
+        {
+            using var verifier = new AppSettingsRepository(appSettingsFilePath);
+            var loaded = verifier.LoadAsync().GetAwaiter().GetResult();
+            Ensure(loaded.Warning is null, loaded.Warning ?? "Final thumbnail settings load failed.");
+            Ensure(
+                verifier.GetSnapshot().ThumbnailIntervalPercent == 2.25,
+                "Final thumbnail interval was not persisted.");
+            var report = new
+            {
+                success = true,
+                video = Path.GetFullPath(args[0]),
+                appSettingsFilePath,
+                thumbnailSettingsValidation,
+                finalThumbnailIntervalPercent = verifier.GetSnapshot().ThumbnailIntervalPercent,
+                audioDiagnostics = shutdownDiagnostics,
+            };
+            WriteReport(args[1], report);
+            Console.WriteLine(JsonSerializer.Serialize(report));
+        }
+
         return exitCode;
+    }
+
+    private static async Task<ThumbnailSettingsValidation> ValidateThumbnailSettingsAsync(
+        MainWindow window,
+        LibVlcPlaybackBackend backend,
+        AppSettingsRepository repository,
+        string videoPath)
+    {
+        var menuItem = (MenuItem)window.FindName("ThumbnailSettingsMenuItem");
+        Ensure(menuItem.IsEnabled, "Thumbnail settings menu was not enabled.");
+        Ensure(window.ThumbnailIntervalPercent == 1.25, "Persisted thumbnail interval was not restored.");
+        Ensure(
+            window.ThumbnailSession is { IntervalPercent: 1.25 },
+            "The initial video did not freeze the restored thumbnail interval.");
+
+        double dialogWidth = 0;
+        double dialogHeight = 0;
+        _ = window.Dispatcher.BeginInvoke(() =>
+        {
+            var dialog = Application.Current.Windows.OfType<ThumbnailSettingsWindow>().Single();
+            dialogWidth = dialog.Width;
+            dialogHeight = dialog.Height;
+            Ensure(
+                dialogWidth == 420 && dialogHeight == 230,
+                "Thumbnail settings dialog dimensions changed from the approved UI.");
+            var slider = (Slider)dialog.FindName("IntervalSlider");
+            slider.Value = 2.25;
+            Ensure(
+                ((TextBlock)dialog.FindName("IntervalValueText")).Text == "2.25%",
+                "Thumbnail interval text did not follow the quarter-percent slider value.");
+            ((Button)dialog.FindName("OkButton")).RaiseEvent(
+                new RoutedEventArgs(Button.ClickEvent));
+        });
+        menuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, menuItem));
+        await WaitUntilAsync(
+            () => repository.GetSnapshot().ThumbnailIntervalPercent == 2.25 && menuItem.IsEnabled,
+            TimeSpan.FromSeconds(5),
+            "Thumbnail interval was not saved from the product dialog.");
+        Ensure(
+            window.ThumbnailSession is { IntervalPercent: 1.25 },
+            "Changing thumbnail settings altered the current video session.");
+
+        Ensure(await window.OpenVideoAsync(videoPath), "Could not reopen the video for thumbnail session validation.");
+        Ensure(
+            window.ThumbnailSession is { IntervalPercent: 2.25 } session &&
+            string.Equals(
+                session.VideoPath,
+                Path.GetFullPath(videoPath),
+                StringComparison.OrdinalIgnoreCase),
+            "The next video did not freeze the updated thumbnail interval.");
+
+        _ = window.Dispatcher.BeginInvoke(() =>
+        {
+            var dialog = Application.Current.Windows.OfType<ThumbnailSettingsWindow>().Single();
+            ((Slider)dialog.FindName("IntervalSlider")).Value = 3.5;
+            dialog.DialogResult = false;
+        });
+        menuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, menuItem));
+        Ensure(
+            repository.GetSnapshot().ThumbnailIntervalPercent == 2.25 &&
+            window.ThumbnailIntervalPercent == 2.25,
+            "Cancelling thumbnail settings changed the saved value.");
+
+        return new ThumbnailSettingsValidation(
+            InitialIntervalPercent: 1.25,
+            SavedIntervalPercent: 2.25,
+            CurrentSessionStayedAtInitialValue: true,
+            NextOpenUsedSavedValue: true,
+            CancelPreservedSavedValue: true,
+            DialogWidth: dialogWidth,
+            DialogHeight: dialogHeight,
+            FinalMuted: backend.IsMuted);
     }
 
     private static async Task<PlaylistValidation> ValidatePlaylistAsync(
@@ -2257,6 +2374,16 @@ internal static class Program
         bool BulkMissingRemovalPersisted,
         bool ClearHistoryPersisted,
         bool ForegroundInherited);
+
+    private readonly record struct ThumbnailSettingsValidation(
+        double InitialIntervalPercent,
+        double SavedIntervalPercent,
+        bool CurrentSessionStayedAtInitialValue,
+        bool NextOpenUsedSavedValue,
+        bool CancelPreservedSavedValue,
+        double DialogWidth,
+        double DialogHeight,
+        bool FinalMuted);
 
     private readonly record struct PlaylistValidation(
         int EntryCount,

@@ -131,7 +131,7 @@ internal static class Program
         {
             appSettings = new AppSettingsRepository(appSettingsFilePath);
             appSettings.LoadAsync().GetAwaiter().GetResult();
-            var saveSettings = appSettings.SetThumbnailIntervalPercentAsync(1.25).GetAwaiter().GetResult();
+            var saveSettings = appSettings.SetThumbnailSettingsAsync(1.25, 17).GetAwaiter().GetResult();
             Ensure(saveSettings.Success, saveSettings.ErrorMessage ?? "Initial thumbnail settings save failed.");
         }
 
@@ -188,6 +188,7 @@ internal static class Program
                     thumbnailHoverValidation = await ValidateThumbnailHoverAsync(
                         window,
                         seekSlider,
+                        backend,
                         lengthMilliseconds);
                     exitCode = 0;
                     return;
@@ -496,8 +497,12 @@ internal static class Program
             var loaded = verifier.LoadAsync().GetAwaiter().GetResult();
             Ensure(loaded.Warning is null, loaded.Warning ?? "Final thumbnail settings load failed.");
             Ensure(
-                verifier.GetSnapshot().ThumbnailIntervalPercent == 2.25,
-                "Final thumbnail interval was not persisted.");
+                verifier.GetSnapshot() is
+                {
+                    ThumbnailIntervalPercent: 2.25,
+                    ThumbnailPreviewWidthPercent: 20,
+                },
+                "Final thumbnail settings were not persisted.");
             var report = new
             {
                 success = true,
@@ -505,6 +510,7 @@ internal static class Program
                 appSettingsFilePath,
                 thumbnailSettingsValidation,
                 finalThumbnailIntervalPercent = verifier.GetSnapshot().ThumbnailIntervalPercent,
+                finalThumbnailPreviewWidthPercent = verifier.GetSnapshot().ThumbnailPreviewWidthPercent,
                 audioDiagnostics = shutdownDiagnostics,
             };
             WriteReport(args[1], report);
@@ -807,6 +813,7 @@ internal static class Program
     private static async Task<ThumbnailHoverValidation> ValidateThumbnailHoverAsync(
         MainWindow window,
         Slider seekSlider,
+        LibVlcPlaybackBackend backend,
         long durationMilliseconds)
     {
         var popup = (Popup)window.FindName("SeekThumbnailPopup");
@@ -816,7 +823,12 @@ internal static class Program
         var run = window.ThumbnailGenerationRun ??
                   throw new InvalidOperationException("The product thumbnail session was not started.");
         seekSlider.UpdateLayout();
-        Ensure(seekSlider.ActualWidth > 240, "The seek slider was too narrow for popup validation.");
+        var expectedLayout = ThumbnailPreviewLayout.Create(
+            window.ActualWidth,
+            window.ThumbnailPreviewWidthPercent,
+            backend.VideoDisplayAspectRatio);
+        Ensure(seekSlider.ActualWidth > expectedLayout.PopupWidth,
+            "The seek slider was too narrow for popup validation.");
 
         var pointerX = seekSlider.ActualWidth * 0.77;
         var positionMilliseconds = SeekUiGeometry.PositionFromPointer(
@@ -833,7 +845,7 @@ internal static class Program
         Ensure(popup.IsOpen, "The seek thumbnail popup did not open.");
         Ensure(!popup.IsHitTestVisible && !popup.Focusable,
             "The seek thumbnail popup must not accept mouse or focus input.");
-        Ensure(Math.Abs(popup.VerticalOffset - -183) < 0.1,
+        Ensure(Math.Abs(popup.VerticalOffset + expectedLayout.PopupHeight + 8) < 0.1,
             $"Unexpected thumbnail popup vertical offset: {popup.VerticalOffset}.");
         Ensure(timeText.Text == PlaybackTimelinePresentation.FormatMilliseconds((long)positionMilliseconds),
             "The thumbnail popup time did not match the hover position.");
@@ -855,8 +867,10 @@ internal static class Program
         window.UpdateSeekThumbnail(seekSlider.ActualWidth);
         var rightOffset = popup.HorizontalOffset;
         Ensure(Math.Abs(leftOffset) < 0.1, $"Left popup clamp was {leftOffset}.");
-        Ensure(Math.Abs(rightOffset - (seekSlider.ActualWidth - 240)) < 0.1,
+        Ensure(Math.Abs(rightOffset - (seekSlider.ActualWidth - expectedLayout.PopupWidth)) < 0.1,
             $"Right popup clamp was {rightOffset}.");
+        Ensure(Math.Abs(popup.VerticalOffset + expectedLayout.PopupHeight + 8) < 0.1,
+            $"Unexpected thumbnail popup vertical offset: {popup.VerticalOffset}.");
         window.CloseSeekThumbnail();
         Ensure(!popup.IsOpen, "The seek thumbnail popup did not close.");
 
@@ -883,6 +897,7 @@ internal static class Program
         var menuItem = (MenuItem)window.FindName("ThumbnailSettingsMenuItem");
         Ensure(menuItem.IsEnabled, "Thumbnail settings menu was not enabled.");
         Ensure(window.ThumbnailIntervalPercent == 1.25, "Persisted thumbnail interval was not restored.");
+        Ensure(window.ThumbnailPreviewWidthPercent == 17, "Persisted thumbnail preview width was not restored.");
         Ensure(
             window.ThumbnailSession is { IntervalPercent: 1.25 },
             "The initial video did not freeze the restored thumbnail interval.");
@@ -895,24 +910,35 @@ internal static class Program
             dialogWidth = dialog.Width;
             dialogHeight = dialog.Height;
             Ensure(
-                dialogWidth == 420 && dialogHeight == 230,
+                dialogWidth == 420 && dialogHeight == 340,
                 "Thumbnail settings dialog dimensions changed from the approved UI.");
             var slider = (Slider)dialog.FindName("IntervalSlider");
             slider.Value = 2.25;
             Ensure(
                 ((TextBlock)dialog.FindName("IntervalValueText")).Text == "2.25%",
                 "Thumbnail interval text did not follow the quarter-percent slider value.");
+            var previewWidthSlider = (Slider)dialog.FindName("PreviewWidthSlider");
+            previewWidthSlider.Value = 20;
+            Ensure(
+                ((TextBlock)dialog.FindName("PreviewWidthValueText")).Text == "20%",
+                "Thumbnail preview width text did not follow the one-percent slider value.");
             ((Button)dialog.FindName("OkButton")).RaiseEvent(
                 new RoutedEventArgs(Button.ClickEvent));
         });
         menuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, menuItem));
         await WaitUntilAsync(
-            () => repository.GetSnapshot().ThumbnailIntervalPercent == 2.25 && menuItem.IsEnabled,
+            () => repository.GetSnapshot() is
+                  {
+                      ThumbnailIntervalPercent: 2.25,
+                      ThumbnailPreviewWidthPercent: 20,
+                  } && menuItem.IsEnabled,
             TimeSpan.FromSeconds(5),
             "Thumbnail interval was not saved from the product dialog.");
         Ensure(
             window.ThumbnailSession is { IntervalPercent: 1.25 },
             "Changing thumbnail settings altered the current video session.");
+        Ensure(window.ThumbnailPreviewWidthPercent == 20,
+            "Changing thumbnail settings did not immediately update the preview width.");
 
         Ensure(await window.OpenVideoAsync(videoPath), "Could not reopen the video for thumbnail session validation.");
         Ensure(
@@ -927,17 +953,25 @@ internal static class Program
         {
             var dialog = Application.Current.Windows.OfType<ThumbnailSettingsWindow>().Single();
             ((Slider)dialog.FindName("IntervalSlider")).Value = 3.5;
+            ((Slider)dialog.FindName("PreviewWidthSlider")).Value = 25;
             dialog.DialogResult = false;
         });
         menuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, menuItem));
         Ensure(
-            repository.GetSnapshot().ThumbnailIntervalPercent == 2.25 &&
-            window.ThumbnailIntervalPercent == 2.25,
+            repository.GetSnapshot() is
+            {
+                ThumbnailIntervalPercent: 2.25,
+                ThumbnailPreviewWidthPercent: 20,
+            } &&
+            window.ThumbnailIntervalPercent == 2.25 &&
+            window.ThumbnailPreviewWidthPercent == 20,
             "Cancelling thumbnail settings changed the saved value.");
 
         return new ThumbnailSettingsValidation(
             InitialIntervalPercent: 1.25,
             SavedIntervalPercent: 2.25,
+            InitialPreviewWidthPercent: 17,
+            SavedPreviewWidthPercent: 20,
             CurrentSessionStayedAtInitialValue: true,
             NextOpenUsedSavedValue: true,
             CancelPreservedSavedValue: true,
@@ -1782,9 +1816,14 @@ internal static class Program
         var endpointVolume = endpoint.AudioEndpointVolume.MasterVolumeLevelScalar;
         var endpointMuted = endpoint.AudioEndpointVolume.Mute;
         Ensure(!endpointMuted, "Audible validation requires the default endpoint to be unmuted.");
+        var productOutputCeiling = volumePercent <= PlaybackVolume.BasicMaximumPercent
+            ? volumePercent / 100.0
+            : Math.Pow(10, RealtimeVolumeProcessor.BoostedCeilingDecibels / 20);
+        var effectiveEndpointCeiling = productOutputCeiling * endpointVolume;
         Ensure(
-            endpointVolume <= 0.5 + 0.000001,
-            $"Audible validation requires endpoint volume at 50% or lower; current value is {endpointVolume:P1}.");
+            effectiveEndpointCeiling <= 0.5 + 0.000001,
+            "Audible validation requires the product volume and endpoint volume to keep the " +
+            $"maximum effective amplitude at 50% or lower; current value is {effectiveEndpointCeiling:P1}.");
 
         backend.SetVolumePercent(volumePercent);
         try
@@ -1809,7 +1848,9 @@ internal static class Program
         {
             durationSeconds = 3,
             volumePercent,
+            endpoint.FriendlyName,
             endpointVolumePercent = endpointVolume * 100,
+            effectiveEndpointCeiling,
             peak = diagnostics.Peak,
             ceiling,
             diagnostics.OverRangeSamples,
@@ -2778,6 +2819,8 @@ internal static class Program
     private readonly record struct ThumbnailSettingsValidation(
         double InitialIntervalPercent,
         double SavedIntervalPercent,
+        double InitialPreviewWidthPercent,
+        double SavedPreviewWidthPercent,
         bool CurrentSessionStayedAtInitialValue,
         bool NextOpenUsedSavedValue,
         bool CancelPreservedSavedValue,

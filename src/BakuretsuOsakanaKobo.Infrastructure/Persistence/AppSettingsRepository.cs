@@ -6,6 +6,7 @@ public sealed class AppSettingsRepository : IDisposable
     private readonly PortableJsonStore<AppSettings> _store;
     private readonly SemaphoreSlim _saveGate = new(1, 1);
     private double _thumbnailIntervalPercent = ThumbnailGenerationInterval.DefaultPercent;
+    private double _thumbnailPreviewWidthPercent = ThumbnailPreviewSize.DefaultPercent;
     private bool _loaded;
     private bool _disposed;
 
@@ -29,6 +30,8 @@ public sealed class AppSettingsRepository : IDisposable
             ThrowIfDisposed();
             _thumbnailIntervalPercent = result.Value.ThumbnailIntervalPercent ??
                                         ThumbnailGenerationInterval.DefaultPercent;
+            _thumbnailPreviewWidthPercent = result.Value.ThumbnailPreviewWidthPercent ??
+                                            ThumbnailPreviewSize.DefaultPercent;
             _loaded = true;
         }
 
@@ -53,6 +56,22 @@ public sealed class AppSettingsRepository : IDisposable
     {
         ThumbnailGenerationInterval.EnsureValid(percent, nameof(percent));
         return MutateAndSaveAsync(() => _thumbnailIntervalPercent = percent, cancellationToken);
+    }
+
+    public Task<JsonSaveResult> SetThumbnailSettingsAsync(
+        double intervalPercent,
+        double previewWidthPercent,
+        CancellationToken cancellationToken = default)
+    {
+        ThumbnailGenerationInterval.EnsureValid(intervalPercent, nameof(intervalPercent));
+        ThumbnailPreviewSize.EnsureValid(previewWidthPercent, nameof(previewWidthPercent));
+        return MutateAndSaveAsync(
+            () =>
+            {
+                _thumbnailIntervalPercent = intervalPercent;
+                _thumbnailPreviewWidthPercent = previewWidthPercent;
+            },
+            cancellationToken);
     }
 
     public void Dispose()
@@ -97,9 +116,12 @@ public sealed class AppSettingsRepository : IDisposable
     private AppSettings CreateDocument() => new()
     {
         ThumbnailIntervalPercent = _thumbnailIntervalPercent,
+        ThumbnailPreviewWidthPercent = _thumbnailPreviewWidthPercent,
     };
 
-    private AppSettingsSnapshot CreateSnapshot() => new(_thumbnailIntervalPercent);
+    private AppSettingsSnapshot CreateSnapshot() => new(
+        _thumbnailIntervalPercent,
+        _thumbnailPreviewWidthPercent);
 
     private void ThrowIfNotReady()
     {
@@ -113,4 +135,6 @@ public sealed class AppSettingsRepository : IDisposable
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
 }
 
-public sealed record AppSettingsSnapshot(double ThumbnailIntervalPercent);
+public sealed record AppSettingsSnapshot(
+    double ThumbnailIntervalPercent,
+    double ThumbnailPreviewWidthPercent);

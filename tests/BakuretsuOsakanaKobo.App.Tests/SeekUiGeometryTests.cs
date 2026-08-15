@@ -1,9 +1,40 @@
+using BakuretsuOsakanaKobo.Infrastructure.Persistence;
 using Xunit;
 
 namespace BakuretsuOsakanaKobo.App.Tests;
 
 public sealed class SeekUiGeometryTests
 {
+    [Theory]
+    [InlineData(720, 10, 120)]
+    [InlineData(1000, 15, 150)]
+    [InlineData(2000, 30, 320)]
+    public void PreviewWidthUsesWindowPercentageAndPixelLimits(
+        double windowWidth,
+        double percent,
+        double expected)
+    {
+        Assert.Equal(expected, ThumbnailPreviewSize.ResolveWidth(windowWidth, percent));
+    }
+
+    [Theory]
+    [InlineData(1000, 15, 16.0 / 9.0, 150, 84.375)]
+    [InlineData(1000, 15, 9.0 / 16.0, 150, 266.6666666666667)]
+    public void PreviewLayoutFollowsVideoAspectRatio(
+        double windowWidth,
+        double percent,
+        double aspectRatio,
+        double expectedWidth,
+        double expectedHeight)
+    {
+        var layout = ThumbnailPreviewLayout.Create(windowWidth, percent, aspectRatio);
+
+        Assert.Equal(expectedWidth, layout.ImageWidth);
+        Assert.Equal(expectedHeight, layout.ImageHeight, precision: 10);
+        Assert.Equal(expectedWidth + 12, layout.PopupWidth);
+        Assert.Equal(expectedHeight + 40, layout.PopupHeight, precision: 10);
+    }
+
     [Theory]
     [InlineData(0, 500, 240, 0)]
     [InlineData(250, 500, 240, 130)]

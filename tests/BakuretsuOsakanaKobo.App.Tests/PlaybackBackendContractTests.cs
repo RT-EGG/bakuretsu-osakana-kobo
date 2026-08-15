@@ -168,6 +168,8 @@ public sealed class PlaybackBackendContractTests
 
         public float Rate { get; private set; } = PlaybackRate.Default;
 
+        public double VideoDisplayAspectRatio => PlaybackVideoGeometry.DefaultDisplayAspectRatio;
+
         public string? CurrentPath { get; private set; }
 
         public Task<bool> OpenAndPlayAsync(

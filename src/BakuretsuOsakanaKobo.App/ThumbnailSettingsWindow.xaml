@@ -4,9 +4,9 @@
         Title="サムネイル設定"
         Icon="Assets/BakuretsuOsakanaKobo.ico"
         Width="420"
-        Height="230"
+        Height="340"
         MinWidth="380"
-        MinHeight="220"
+        MinHeight="330"
         ResizeMode="NoResize"
         WindowStartupLocation="CenterOwner"
         ShowInTaskbar="False"
@@ -16,6 +16,9 @@
         AutomationProperties.Name="サムネイル設定">
     <Grid Margin="20">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -47,11 +50,38 @@
                        Text="1.00%" />
         </Grid>
         <TextBlock Grid.Row="2"
+                   Margin="0,18,0,0"
+                   FontSize="18"
+                   FontWeight="SemiBold"
+                   Text="プレビュー幅" />
+        <Grid Grid.Row="3" Margin="0,16,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="64" />
+            </Grid.ColumnDefinitions>
+            <Slider x:Name="PreviewWidthSlider"
+                    VerticalAlignment="Center"
+                    Minimum="10"
+                    Maximum="30"
+                    TickFrequency="1"
+                    IsSnapToTickEnabled="True"
+                    IsMoveToPointEnabled="True"
+                    AutomationProperties.Name="サムネイルプレビュー幅" />
+            <TextBlock x:Name="PreviewWidthValueText"
+                       Grid.Column="1"
+                       Margin="12,0,0,0"
+                       VerticalAlignment="Center"
+                       FontFamily="Cascadia Mono, Consolas"
+                       FontSize="14"
+                       TextAlignment="Right"
+                       Text="15%" />
+        </Grid>
+        <TextBlock Grid.Row="4"
                    Margin="0,12,0,0"
                    Foreground="{StaticResource MutedTextBrush}"
                    TextWrapping="Wrap"
-                   Text="設定は次に開く動画から適用されます。現在の動画のサムネイルには影響しません。" />
-        <StackPanel Grid.Row="4" Margin="0,18,0,0" HorizontalAlignment="Right" Orientation="Horizontal">
+                   Text="生成間隔は次に開く動画から適用されます。プレビュー幅は現在の動画へすぐに反映され、高さは動画の縦横比に合わせます。" />
+        <StackPanel Grid.Row="7" Margin="0,18,0,0" HorizontalAlignment="Right" Orientation="Horizontal">
             <Button x:Name="CancelButton"
                     Width="88"
                     Margin="0,0,8,0"

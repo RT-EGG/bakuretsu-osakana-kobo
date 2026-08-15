@@ -22,6 +22,8 @@ public interface IPlaybackBackend : IDisposable
 
     float Rate { get; }
 
+    double VideoDisplayAspectRatio { get; }
+
     string? CurrentPath { get; }
 
     Task<bool> OpenAndPlayAsync(

@@ -326,7 +326,7 @@
                StaysOpen="True"
                IsHitTestVisible="False"
                Focusable="False">
-            <Border Width="240"
+            <Border x:Name="ThumbnailPopupBorder"
                     Padding="5"
                     Background="#F20B1119"
                     BorderBrush="#6A7F99"
@@ -334,10 +334,12 @@
                     CornerRadius="6">
                 <Grid>
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="135" />
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="28" />
                     </Grid.RowDefinitions>
                     <Border x:Name="ThumbnailPreviewArtwork"
+                            Width="150"
+                            Height="84.375"
                             ClipToBounds="True"
                             CornerRadius="3"
                             Background="#101D2A">

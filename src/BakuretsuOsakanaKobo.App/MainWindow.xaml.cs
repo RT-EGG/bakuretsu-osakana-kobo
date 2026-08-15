@@ -23,8 +23,6 @@ public partial class MainWindow : Window
 {
     private static readonly TimeSpan PlaybackTimelineRefreshInterval = TimeSpan.FromMilliseconds(200);
     private static readonly TimeSpan TemporaryPlaybackRateReleasePollInterval = TimeSpan.FromMilliseconds(25);
-    private const double ThumbnailPreviewWidth = 240;
-    private const double ThumbnailPreviewHeight = 175;
     private const double ThumbnailPreviewGap = 8;
     private const int WindowMessageActivateApplication = 0x001C;
     internal static readonly TimeSpan VideoProfileSaveDelay = TimeSpan.FromSeconds(3);
@@ -36,6 +34,8 @@ public partial class MainWindow : Window
     internal bool IsFullscreen => _isFullscreen;
 
     internal double ThumbnailIntervalPercent => _thumbnailIntervalPercent;
+
+    internal double ThumbnailPreviewWidthPercent => _thumbnailPreviewWidthPercent;
 
     internal ThumbnailGenerationSession? ThumbnailSession => _thumbnailSession;
 
@@ -74,6 +74,7 @@ public partial class MainWindow : Window
     private Task? _playlistAdvanceTask;
     private Task<JsonSaveResult>? _appSettingsMutationTask;
     private double _thumbnailIntervalPercent = ThumbnailGenerationInterval.DefaultPercent;
+    private double _thumbnailPreviewWidthPercent = ThumbnailPreviewSize.DefaultPercent;
     private ThumbnailGenerationSession? _thumbnailSession;
     private ThumbnailGenerationRun? _thumbnailGenerationRun;
     private Task? _thumbnailStopTask;
@@ -142,8 +143,11 @@ public partial class MainWindow : Window
         _playlist = playlist;
         _appSettings = appSettings;
         _thumbnailGenerationService = thumbnailGenerationService;
-        _thumbnailIntervalPercent = appSettings?.GetSnapshot().ThumbnailIntervalPercent ??
+        var settingsSnapshot = appSettings?.GetSnapshot();
+        _thumbnailIntervalPercent = settingsSnapshot?.ThumbnailIntervalPercent ??
                                     ThumbnailGenerationInterval.DefaultPercent;
+        _thumbnailPreviewWidthPercent = settingsSnapshot?.ThumbnailPreviewWidthPercent ??
+                                        ThumbnailPreviewSize.DefaultPercent;
         OpenVideoMenuItem.IsEnabled = playbackBackend is not null;
         ThumbnailSettingsMenuItem.IsEnabled = appSettings is not null;
         RebuildRecentFilesMenu();
@@ -299,7 +303,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        var dialog = new ThumbnailSettingsWindow(_thumbnailIntervalPercent)
+        var dialog = new ThumbnailSettingsWindow(
+            _thumbnailIntervalPercent,
+            _thumbnailPreviewWidthPercent)
         {
             Owner = this,
         };
@@ -312,9 +318,13 @@ public partial class MainWindow : Window
         Task<JsonSaveResult> mutationTask;
         try
         {
-            mutationTask = appSettings.SetThumbnailIntervalPercentAsync(
-                dialog.SelectedIntervalPercent);
-            _thumbnailIntervalPercent = appSettings.GetSnapshot().ThumbnailIntervalPercent;
+            mutationTask = appSettings.SetThumbnailSettingsAsync(
+                dialog.SelectedIntervalPercent,
+                dialog.SelectedPreviewWidthPercent);
+            var snapshot = appSettings.GetSnapshot();
+            _thumbnailIntervalPercent = snapshot.ThumbnailIntervalPercent;
+            _thumbnailPreviewWidthPercent = snapshot.ThumbnailPreviewWidthPercent;
+            CloseSeekThumbnail();
         }
         catch (Exception exception)
         {
@@ -331,8 +341,8 @@ public partial class MainWindow : Window
             {
                 ShowNotification(new UserNotification(
                     UserNotificationSeverity.Information,
-                    $"サムネイル生成間隔を {_thumbnailIntervalPercent:0.00}% に変更しました。",
-                    "次に開く動画から適用します。"));
+                    $"生成間隔を {_thumbnailIntervalPercent:0.00}%、プレビュー幅を {_thumbnailPreviewWidthPercent:0}% に変更しました。",
+                    "生成間隔は次の動画から、プレビュー幅は現在の動画から適用します。"));
             }
             else
             {
@@ -343,7 +353,9 @@ public partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            _thumbnailIntervalPercent = appSettings.GetSnapshot().ThumbnailIntervalPercent;
+            var snapshot = appSettings.GetSnapshot();
+            _thumbnailIntervalPercent = snapshot.ThumbnailIntervalPercent;
+            _thumbnailPreviewWidthPercent = snapshot.ThumbnailPreviewWidthPercent;
             ReportAppSettingsSaveFailure(exception, appSettings.FilePath);
         }
         finally
@@ -2522,11 +2534,18 @@ public partial class MainWindow : Window
         _pendingThumbnailTargetMilliseconds = targetMilliseconds;
         ThumbnailTimeText.Text = PlaybackTimelinePresentation.FormatMilliseconds(
             (long)positionMilliseconds);
+        var previewLayout = ThumbnailPreviewLayout.Create(
+            ActualWidth,
+            _thumbnailPreviewWidthPercent,
+            backend.VideoDisplayAspectRatio);
+        ThumbnailPopupBorder.Width = previewLayout.PopupWidth;
+        ThumbnailPreviewArtwork.Width = previewLayout.ImageWidth;
+        ThumbnailPreviewArtwork.Height = previewLayout.ImageHeight;
         SeekThumbnailPopup.HorizontalOffset = SeekUiGeometry.PopupOffset(
             pointerX,
             SeekSlider.ActualWidth,
-            ThumbnailPreviewWidth);
-        SeekThumbnailPopup.VerticalOffset = -(ThumbnailPreviewHeight + ThumbnailPreviewGap);
+            previewLayout.PopupWidth);
+        SeekThumbnailPopup.VerticalOffset = -(previewLayout.PopupHeight + ThumbnailPreviewGap);
         SeekThumbnailPopup.IsOpen = true;
 
         if (run.TryGet(targetMilliseconds, out var frame))

@@ -12,6 +12,7 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
     private int _volumePercent = PlaybackVolume.DefaultPercent;
     private bool _isMuted;
     private float _rate = PlaybackRate.Default;
+    private double _videoDisplayAspectRatio = PlaybackVideoGeometry.DefaultDisplayAspectRatio;
     private long _knownLengthMilliseconds;
     private long _lastPlaybackTimeMilliseconds;
     private int _preserveTerminalPosition;
@@ -126,6 +127,15 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         }
     }
 
+    public double VideoDisplayAspectRatio
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _videoDisplayAspectRatio;
+        }
+    }
+
     public string? CurrentPath { get; private set; }
 
     internal RealtimeAudioDiagnostics AudioDiagnostics => _audioOutput.Diagnostics;
@@ -234,9 +244,9 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
                 return false;
             }
 
-            var videoCodec = nextMedia.Tracks
-                .FirstOrDefault(track => track.TrackType == TrackType.Video)
-                .Codec;
+            var videoTrack = nextMedia.Tracks
+                .FirstOrDefault(track => track.TrackType == TrackType.Video);
+            var videoCodec = videoTrack.Codec;
             var audioCodec = nextMedia.Tracks
                 .FirstOrDefault(track => track.TrackType == TrackType.Audio)
                 .Codec;
@@ -294,6 +304,14 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
                 return false;
             }
 
+            var videoData = videoTrack.Data.Video;
+            var nextVideoDisplayAspectRatio = PlaybackVideoGeometry.DisplayAspectRatio(
+                videoData.Width,
+                videoData.Height,
+                videoData.SarNum,
+                videoData.SarDen,
+                SwapsVideoAxes(videoData.Orientation));
+
             if (MediaPlayer.SetRate(PlaybackRate.Default) != 0)
             {
                 RaiseError(new PlaybackErrorEventArgs(
@@ -317,6 +335,7 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
             _currentMedia = nextMedia;
             nextMedia = null;
             CurrentPath = fullPath;
+            _videoDisplayAspectRatio = nextVideoDisplayAspectRatio;
             nextAudioStateCommitted = true;
             DisposeResource(previousMedia);
             return true;
@@ -743,6 +762,12 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
 
         return new string(characters).TrimEnd('\0');
     }
+
+    private static bool SwapsVideoAxes(VideoOrientation orientation) => orientation is
+        VideoOrientation.LeftTop or
+        VideoOrientation.LeftBottom or
+        VideoOrientation.RightTop or
+        VideoOrientation.RightBottom;
 
     private void RaiseSafely(EventHandler? handlers, EventArgs eventArgs)
     {

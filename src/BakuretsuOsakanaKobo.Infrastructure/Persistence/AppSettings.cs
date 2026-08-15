@@ -8,10 +8,52 @@ public sealed class AppSettings
 
     public double? ThumbnailIntervalPercent { get; init; }
 
+    public double? ThumbnailPreviewWidthPercent { get; init; }
+
     public static bool IsValid(AppSettings settings) =>
         settings.SchemaVersion == CurrentSchemaVersion &&
         (settings.ThumbnailIntervalPercent is null ||
-         ThumbnailGenerationInterval.IsValid(settings.ThumbnailIntervalPercent.Value));
+         ThumbnailGenerationInterval.IsValid(settings.ThumbnailIntervalPercent.Value)) &&
+        (settings.ThumbnailPreviewWidthPercent is null ||
+         ThumbnailPreviewSize.IsValid(settings.ThumbnailPreviewWidthPercent.Value));
+}
+
+public static class ThumbnailPreviewSize
+{
+    public const double MinimumPercent = 10;
+    public const double MaximumPercent = 30;
+    public const double StepPercent = 1;
+    public const double DefaultPercent = 15;
+    public const double MinimumWidth = 120;
+    public const double MaximumWidth = 320;
+
+    public static bool IsValid(double percent) =>
+        double.IsFinite(percent) &&
+        percent >= MinimumPercent &&
+        percent <= MaximumPercent &&
+        Math.Abs(percent - Math.Round(percent)) < 0.000_001;
+
+    public static void EnsureValid(double percent, string? parameterName = null)
+    {
+        if (!IsValid(percent))
+        {
+            throw new ArgumentOutOfRangeException(
+                parameterName ?? nameof(percent),
+                percent,
+                $"Thumbnail preview width must be {MinimumPercent:0} to {MaximumPercent:0} percent in {StepPercent:0}-percent steps.");
+        }
+    }
+
+    public static double ResolveWidth(double windowWidth, double percent)
+    {
+        EnsureValid(percent, nameof(percent));
+        if (!double.IsFinite(windowWidth) || windowWidth <= 0)
+        {
+            return MinimumWidth;
+        }
+
+        return Math.Clamp(windowWidth * percent / 100, MinimumWidth, MaximumWidth);
+    }
 }
 
 public static class ThumbnailGenerationInterval

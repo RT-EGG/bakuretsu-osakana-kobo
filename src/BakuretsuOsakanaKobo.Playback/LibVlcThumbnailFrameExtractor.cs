@@ -40,9 +40,19 @@ internal sealed class LibVlcThumbnailFrameExtractor(Action<Exception>? callbackE
             throw new InvalidOperationException("The video dimensions could not be determined.");
         }
 
+        var displayAspectRatio = PlaybackVideoGeometry.DisplayAspectRatio(
+            videoTrack.Data.Video.Width,
+            videoTrack.Data.Video.Height,
+            videoTrack.Data.Video.SarNum,
+            videoTrack.Data.Video.SarDen,
+            videoTrack.Data.Video.Orientation is
+                VideoOrientation.LeftTop or
+                VideoOrientation.LeftBottom or
+                VideoOrientation.RightTop or
+                VideoOrientation.RightBottom);
         var outputHeight = Math.Max(
             2,
-            checked((int)Math.Round(sourceHeight * (OutputWidth / (double)sourceWidth) / 2) * 2));
+            checked((int)Math.Round((OutputWidth / displayAspectRatio) / 2) * 2));
         var player = new MediaPlayer(libVlc) { Mute = true };
         var sink = new ThumbnailFrameSink(OutputWidth, outputHeight, callbackExceptionHandler);
         var playbackError = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

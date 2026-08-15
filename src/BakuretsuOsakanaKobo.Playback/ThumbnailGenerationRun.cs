@@ -7,6 +7,7 @@ public sealed class ThumbnailGenerationRun
     private readonly ConcurrentDictionary<long, ThumbnailFrame> _frames = new();
     private readonly TaskCompletionSource _completion =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private long _priorityTargetMilliseconds = -1;
 
     internal ThumbnailGenerationRun(
         long generationId,
@@ -42,7 +43,29 @@ public sealed class ThumbnailGenerationRun
         return frame is not null;
     }
 
+    public bool TryGet(long targetMilliseconds, out ThumbnailFrame? frame) =>
+        _frames.TryGetValue(targetMilliseconds, out frame);
+
+    public void RequestPriority(long targetMilliseconds)
+    {
+        if (targetMilliseconds < 0 || targetMilliseconds >= DurationMilliseconds)
+        {
+            throw new ArgumentOutOfRangeException(nameof(targetMilliseconds));
+        }
+
+        if (!_frames.ContainsKey(targetMilliseconds))
+        {
+            Interlocked.Exchange(ref _priorityTargetMilliseconds, targetMilliseconds);
+        }
+    }
+
     internal void Add(ThumbnailFrame frame) => _frames[frame.TargetMilliseconds] = frame;
+
+    internal bool TryTakePriority(out long targetMilliseconds)
+    {
+        targetMilliseconds = Interlocked.Exchange(ref _priorityTargetMilliseconds, -1);
+        return targetMilliseconds >= 0;
+    }
 
     internal void Complete() => _completion.TrySetResult();
 

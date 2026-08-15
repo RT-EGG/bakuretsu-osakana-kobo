@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -44,6 +45,7 @@ internal static class Program
         var validateRecentFiles = Environment.GetEnvironmentVariable("BOK_RECENT_FILES_VALIDATION") == "1";
         var validatePlaylist = Environment.GetEnvironmentVariable("BOK_PLAYLIST_VALIDATION") == "1";
         var validateThumbnailSettings = Environment.GetEnvironmentVariable("BOK_THUMBNAIL_SETTINGS_VALIDATION") == "1";
+        var validateThumbnailHover = Environment.GetEnvironmentVariable("BOK_THUMBNAIL_HOVER_VALIDATION") == "1";
         var profileFilePath = $"{Path.GetFullPath(args[1])}.video-profiles.json";
         VideoProfileRepository? videoProfiles = null;
         if (validateProfiles || validateStartPositions)
@@ -139,6 +141,9 @@ internal static class Program
         backend.SetMuted(true);
         var notificationSink = new RecordingNotificationSink();
         var diagnosticLog = new RecordingDiagnosticLog();
+        var thumbnailGenerationService = validateThumbnailHover
+            ? new ThumbnailGenerationService()
+            : null;
         window.ConfigureServices(
             new PortableDataPaths(AppContext.BaseDirectory),
             new ErrorReporter(diagnosticLog, notificationSink),
@@ -146,7 +151,8 @@ internal static class Program
             videoProfiles,
             recentFiles,
             playlist,
-            appSettings);
+            appSettings,
+            thumbnailGenerationService);
 
         var exitCode = 1;
         ProfileDelayValidation? profileDelayValidation = null;
@@ -155,6 +161,7 @@ internal static class Program
         RecentFileValidation? recentFileValidation = null;
         PlaylistValidation? playlistValidation = null;
         ThumbnailSettingsValidation? thumbnailSettingsValidation = null;
+        ThumbnailHoverValidation? thumbnailHoverValidation = null;
         window.Loaded += async (_, _) =>
         {
             var windowLoadedMilliseconds = processClock.Elapsed.TotalMilliseconds;
@@ -171,6 +178,16 @@ internal static class Program
                 Ensure(!volumeSlider.IsEnabled && !muteButton.IsEnabled, "Volume controls must start disabled.");
                 var openMetrics = await MeasureOpenAsync(window, seekSlider, backend, args[0]);
                 var lengthMilliseconds = backend.LengthMilliseconds;
+                if (validateThumbnailHover)
+                {
+                    thumbnailHoverValidation = await ValidateThumbnailHoverAsync(
+                        window,
+                        seekSlider,
+                        lengthMilliseconds);
+                    exitCode = 0;
+                    return;
+                }
+
                 if (validateThumbnailSettings)
                 {
                     thumbnailSettingsValidation = await ValidateThumbnailSettingsAsync(
@@ -483,6 +500,19 @@ internal static class Program
             Console.WriteLine(JsonSerializer.Serialize(report));
         }
 
+        if (validateThumbnailHover && exitCode == 0)
+        {
+            var report = new
+            {
+                success = true,
+                video = Path.GetFullPath(args[0]),
+                thumbnailHoverValidation,
+                audioDiagnostics = shutdownDiagnostics,
+            };
+            WriteReport(args[1], report);
+            Console.WriteLine(JsonSerializer.Serialize(report));
+        }
+
         return exitCode;
     }
 
@@ -492,7 +522,7 @@ internal static class Program
     {
         var fullVideoPath = Path.GetFullPath(videoPath);
         var errors = new ConcurrentQueue<string>();
-        const long durationHint = 1;
+        const long durationHint = 60_000;
 
         var generationFailures = new ConcurrentQueue<string>();
         await using var service = new ThumbnailGenerationService(
@@ -506,6 +536,16 @@ internal static class Program
             () => cancelledRun.Count >= 1,
             TimeSpan.FromSeconds(10),
             "The first thumbnail session did not produce a frame.");
+        var priorityClock = Stopwatch.StartNew();
+        cancelledRun.RequestPriority(45_000);
+        await WaitUntilAsync(
+            () => cancelledRun.TryGet(45_000, out _),
+            TimeSpan.FromSeconds(10),
+            "The priority thumbnail was not generated.");
+        var priorityMilliseconds = priorityClock.Elapsed.TotalMilliseconds;
+        var frameCountAtPriority = cancelledRun.Count;
+        Ensure(frameCountAtPriority <= 4,
+            $"The priority thumbnail did not overtake background generation: {frameCountAtPriority} frames.");
         Console.WriteLine("First thumbnail received; replacing session.");
         var completedRun = service.StartSession(fullVideoPath, durationHint, 5);
         await AssertCanceledAsync(cancelledRun.Completion, TimeSpan.FromSeconds(5));
@@ -515,7 +555,7 @@ internal static class Program
         Console.WriteLine("Replacement thumbnail session completed.");
 
         var frames = completedRun.GetSnapshot();
-        Ensure(frames.Count == 20, $"Expected 20 cached thumbnails, got {frames.Count}.");
+        Ensure(frames.Count == 21, $"Expected 21 cached thumbnails, got {frames.Count}.");
         Ensure(frames.All(frame => frame.Width == 320), "A cached thumbnail had an unexpected width.");
         Ensure(frames.All(frame => frame.BgraPixels.Length == frame.Stride * frame.Height),
             "A cached thumbnail had an invalid BGRA buffer length.");
@@ -536,7 +576,10 @@ internal static class Program
         {
             success = true,
             video = fullVideoPath,
-            observedDurationEstimateMilliseconds = (long)Math.Round(frames.Last().TargetMilliseconds / 0.95),
+            durationHintMilliseconds = durationHint,
+            priorityTargetMilliseconds = 45_000,
+            priorityMilliseconds,
+            frameCountAtPriority,
             cancelledGenerationId = cancelledRun.GenerationId,
             cancelledFrameCount = cancelledRun.Count,
             cancellationMilliseconds,
@@ -565,6 +608,76 @@ internal static class Program
         catch (OperationCanceledException)
         {
         }
+    }
+
+    private static async Task<ThumbnailHoverValidation> ValidateThumbnailHoverAsync(
+        MainWindow window,
+        Slider seekSlider,
+        long durationMilliseconds)
+    {
+        var popup = (Popup)window.FindName("SeekThumbnailPopup");
+        var previewImage = (Image)window.FindName("ThumbnailPreviewImage");
+        var loadingOverlay = (Border)window.FindName("ThumbnailLoadingOverlay");
+        var timeText = (TextBlock)window.FindName("ThumbnailTimeText");
+        var run = window.ThumbnailGenerationRun ??
+                  throw new InvalidOperationException("The product thumbnail session was not started.");
+        seekSlider.UpdateLayout();
+        Ensure(seekSlider.ActualWidth > 240, "The seek slider was too narrow for popup validation.");
+
+        var pointerX = seekSlider.ActualWidth * 0.77;
+        var positionMilliseconds = SeekUiGeometry.PositionFromPointer(
+            pointerX,
+            seekSlider.ActualWidth,
+            durationMilliseconds);
+        var targetMilliseconds = SeekUiGeometry.ThumbnailTargetMilliseconds(
+            positionMilliseconds,
+            durationMilliseconds,
+            run.IntervalPercent);
+        var priorityClock = Stopwatch.StartNew();
+        window.UpdateSeekThumbnail(pointerX);
+        var initiallyLoading = loadingOverlay.Visibility == Visibility.Visible;
+        Ensure(popup.IsOpen, "The seek thumbnail popup did not open.");
+        Ensure(!popup.IsHitTestVisible && !popup.Focusable,
+            "The seek thumbnail popup must not accept mouse or focus input.");
+        Ensure(Math.Abs(popup.VerticalOffset - -183) < 0.1,
+            $"Unexpected thumbnail popup vertical offset: {popup.VerticalOffset}.");
+        Ensure(timeText.Text == PlaybackTimelinePresentation.FormatMilliseconds((long)positionMilliseconds),
+            "The thumbnail popup time did not match the hover position.");
+
+        await WaitUntilAsync(
+            () => run.TryGet(targetMilliseconds, out _) && previewImage.Source is not null,
+            TimeSpan.FromSeconds(10),
+            "The hover-priority frame was not displayed.");
+        var priorityDisplayMilliseconds = priorityClock.Elapsed.TotalMilliseconds;
+        Ensure(run.TryGet(targetMilliseconds, out var frame),
+            "The displayed hover frame was not present in the session cache.");
+        Ensure(frame!.Width == 320 && frame.Height == 180,
+            $"Unexpected hover frame size: {frame.Width}x{frame.Height}.");
+        Ensure(loadingOverlay.Visibility == Visibility.Collapsed,
+            "The loading overlay remained visible after the frame arrived.");
+
+        window.UpdateSeekThumbnail(0);
+        var leftOffset = popup.HorizontalOffset;
+        window.UpdateSeekThumbnail(seekSlider.ActualWidth);
+        var rightOffset = popup.HorizontalOffset;
+        Ensure(Math.Abs(leftOffset) < 0.1, $"Left popup clamp was {leftOffset}.");
+        Ensure(Math.Abs(rightOffset - (seekSlider.ActualWidth - 240)) < 0.1,
+            $"Right popup clamp was {rightOffset}.");
+        window.CloseSeekThumbnail();
+        Ensure(!popup.IsOpen, "The seek thumbnail popup did not close.");
+
+        return new ThumbnailHoverValidation(
+            initiallyLoading,
+            targetMilliseconds,
+            priorityDisplayMilliseconds,
+            run.Count,
+            frame.Width,
+            frame.Height,
+            popup.VerticalOffset,
+            leftOffset,
+            rightOffset,
+            popup.IsHitTestVisible,
+            popup.IsOpen);
     }
 
     private static async Task<ThumbnailSettingsValidation> ValidateThumbnailSettingsAsync(
@@ -2470,6 +2583,19 @@ internal static class Program
         double DialogWidth,
         double DialogHeight,
         bool FinalMuted);
+
+    private readonly record struct ThumbnailHoverValidation(
+        bool InitiallyLoading,
+        long TargetMilliseconds,
+        double PriorityDisplayMilliseconds,
+        int CachedFrameCount,
+        int PixelWidth,
+        int PixelHeight,
+        double VerticalOffset,
+        double LeftOffset,
+        double RightOffset,
+        bool IsHitTestVisible,
+        bool IsOpenAfterClose);
 
     private readonly record struct PlaylistValidation(
         int EntryCount,

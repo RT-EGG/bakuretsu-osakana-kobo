@@ -9,6 +9,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using BakuretsuOsakanaKobo.Infrastructure.Errors;
 using BakuretsuOsakanaKobo.Infrastructure.Diagnostics;
@@ -22,6 +23,9 @@ public partial class MainWindow : Window
 {
     private static readonly TimeSpan PlaybackTimelineRefreshInterval = TimeSpan.FromMilliseconds(200);
     private static readonly TimeSpan TemporaryPlaybackRateReleasePollInterval = TimeSpan.FromMilliseconds(25);
+    private const double ThumbnailPreviewWidth = 240;
+    private const double ThumbnailPreviewHeight = 175;
+    private const double ThumbnailPreviewGap = 8;
     private const int WindowMessageActivateApplication = 0x001C;
     internal static readonly TimeSpan VideoProfileSaveDelay = TimeSpan.FromSeconds(3);
 
@@ -71,6 +75,8 @@ public partial class MainWindow : Window
     private ThumbnailGenerationSession? _thumbnailSession;
     private ThumbnailGenerationRun? _thumbnailGenerationRun;
     private Task? _thumbnailStopTask;
+    private long _pendingThumbnailGenerationId;
+    private long _pendingThumbnailTargetMilliseconds = -1;
     private int? _playlistCurrentIndex;
     private readonly HashSet<int> _playlistLoadErrorIndices = [];
     private int _isOpeningPlaylistCandidate;
@@ -879,6 +885,7 @@ public partial class MainWindow : Window
         }
 
         EndTemporaryPlaybackRateGesture();
+        CloseSeekThumbnail();
         OpenVideoMenuItem.IsEnabled = false;
         PlayPauseButton.IsEnabled = false;
         UpdatePlaybackTimeline();
@@ -1224,6 +1231,7 @@ public partial class MainWindow : Window
         _fullscreenControlsTimer.Tick -= FullscreenControlsTimer_OnTick;
         _windowSource?.RemoveHook(WindowMessageHook);
         _windowSource = null;
+        CloseSeekThumbnail();
         SeekSlider.RemoveHandler(Thumb.DragStartedEvent, new DragStartedEventHandler(SeekSlider_OnDragStarted));
         SeekSlider.RemoveHandler(Thumb.DragCompletedEvent, new DragCompletedEventHandler(SeekSlider_OnDragCompleted));
         if (_playbackBackend is not null)
@@ -1532,8 +1540,11 @@ public partial class MainWindow : Window
         AutomationProperties.SetName(PlayPauseButton, presentation.AccessibleName);
     }
 
-    private void PlaybackTimelineTimer_OnTick(object? sender, EventArgs eventArgs) =>
+    private void PlaybackTimelineTimer_OnTick(object? sender, EventArgs eventArgs)
+    {
         UpdatePlaybackTimeline();
+        RefreshSeekThumbnail();
+    }
 
     private void UpdatePlaybackTimeline()
     {
@@ -1552,6 +1563,10 @@ public partial class MainWindow : Window
 
         SeekSlider.IsEnabled = presentation.IsSeekEnabled;
         SeekSlider.ToolTip = presentation.SeekToolTip;
+        if (!presentation.IsSeekEnabled)
+        {
+            CloseSeekThumbnail();
+        }
         UpdateStartPositionMarker();
         if (_isSeekDragging || DateTime.UtcNow < _seekPresentationHoldUntilUtc)
         {
@@ -2207,6 +2222,7 @@ public partial class MainWindow : Window
 
         if (_fullscreenControlsState.TryHideAfterTimeout())
         {
+            CloseSeekThumbnail();
             PlaybackControls.Visibility = Visibility.Collapsed;
         }
     }
@@ -2429,8 +2445,106 @@ public partial class MainWindow : Window
         _isSeekDragging = false;
     }
 
-    private void SeekSlider_OnSizeChanged(object sender, SizeChangedEventArgs eventArgs) =>
+    private void SeekSlider_OnSizeChanged(object sender, SizeChangedEventArgs eventArgs)
+    {
         UpdateStartPositionMarker();
+        CloseSeekThumbnail();
+    }
+
+    private void SeekSlider_OnMouseMove(object sender, MouseEventArgs eventArgs) =>
+        UpdateSeekThumbnail(eventArgs.GetPosition(SeekSlider).X);
+
+    private void SeekSlider_OnMouseLeave(object sender, MouseEventArgs eventArgs) =>
+        CloseSeekThumbnail();
+
+    internal void UpdateSeekThumbnail(double pointerX)
+    {
+        var backend = _playbackBackend;
+        var run = _thumbnailGenerationRun;
+        var durationMilliseconds = run?.DurationMilliseconds ?? 0;
+        if (!SeekSlider.IsEnabled ||
+            backend?.CurrentPath is null ||
+            durationMilliseconds <= 0 ||
+            run is null ||
+            SeekSlider.ActualWidth <= 0)
+        {
+            CloseSeekThumbnail();
+            return;
+        }
+
+        var positionMilliseconds = SeekUiGeometry.PositionFromPointer(
+            pointerX,
+            SeekSlider.ActualWidth,
+            durationMilliseconds);
+        var targetMilliseconds = SeekUiGeometry.ThumbnailTargetMilliseconds(
+            positionMilliseconds,
+            durationMilliseconds,
+            run.IntervalPercent);
+        _pendingThumbnailGenerationId = run.GenerationId;
+        _pendingThumbnailTargetMilliseconds = targetMilliseconds;
+        ThumbnailTimeText.Text = PlaybackTimelinePresentation.FormatMilliseconds(
+            (long)positionMilliseconds);
+        SeekThumbnailPopup.HorizontalOffset = SeekUiGeometry.PopupOffset(
+            pointerX,
+            SeekSlider.ActualWidth,
+            ThumbnailPreviewWidth);
+        SeekThumbnailPopup.VerticalOffset = -(ThumbnailPreviewHeight + ThumbnailPreviewGap);
+        SeekThumbnailPopup.IsOpen = true;
+
+        if (run.TryGet(targetMilliseconds, out var frame))
+        {
+            ShowThumbnailFrame(frame!);
+            return;
+        }
+
+        ThumbnailPreviewImage.Source = null;
+        ThumbnailLoadingOverlay.Visibility = Visibility.Visible;
+        run.RequestPriority(targetMilliseconds);
+    }
+
+    private void RefreshSeekThumbnail()
+    {
+        if (_thumbnailGenerationRun is { Completion.IsCanceled: true } or { Completion.IsFaulted: true })
+        {
+            CloseSeekThumbnail();
+            return;
+        }
+
+        if (!SeekThumbnailPopup.IsOpen ||
+            _pendingThumbnailTargetMilliseconds < 0 ||
+            _thumbnailGenerationRun is not { } run ||
+            run.GenerationId != _pendingThumbnailGenerationId ||
+            !run.TryGet(_pendingThumbnailTargetMilliseconds, out var frame))
+        {
+            return;
+        }
+
+        ShowThumbnailFrame(frame!);
+    }
+
+    private void ShowThumbnailFrame(ThumbnailFrame frame)
+    {
+        var image = BitmapSource.Create(
+            frame.Width,
+            frame.Height,
+            96,
+            96,
+            PixelFormats.Bgra32,
+            palette: null,
+            frame.BgraPixels,
+            frame.Stride);
+        image.Freeze();
+        ThumbnailPreviewImage.Source = image;
+        ThumbnailLoadingOverlay.Visibility = Visibility.Collapsed;
+    }
+
+    internal void CloseSeekThumbnail()
+    {
+        SeekThumbnailPopup.IsOpen = false;
+        _pendingThumbnailGenerationId = 0;
+        _pendingThumbnailTargetMilliseconds = -1;
+        ThumbnailPreviewImage.Source = null;
+    }
 
     private void UpdateStartPositionMarker()
     {

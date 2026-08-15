@@ -187,6 +187,8 @@
                             ToolTipService.ShowOnDisabled="True"
                             ValueChanged="SeekSlider_OnValueChanged"
                             SizeChanged="SeekSlider_OnSizeChanged"
+                            MouseMove="SeekSlider_OnMouseMove"
+                            MouseLeave="SeekSlider_OnMouseLeave"
                             AutomationProperties.Name="再生位置" />
                     <Canvas IsHitTestVisible="False">
                         <Grid x:Name="StartPositionMarker"
@@ -271,6 +273,58 @@
                 </Border>
             </Grid>
         </Border>
+
+        <Popup x:Name="SeekThumbnailPopup"
+               PlacementTarget="{Binding ElementName=SeekSlider}"
+               Placement="Relative"
+               AllowsTransparency="True"
+               PopupAnimation="Fade"
+               StaysOpen="True"
+               IsHitTestVisible="False"
+               Focusable="False">
+            <Border Width="240"
+                    Padding="5"
+                    Background="#F20B1119"
+                    BorderBrush="#6A7F99"
+                    BorderThickness="1"
+                    CornerRadius="6">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="135" />
+                        <RowDefinition Height="28" />
+                    </Grid.RowDefinitions>
+                    <Border x:Name="ThumbnailPreviewArtwork"
+                            ClipToBounds="True"
+                            CornerRadius="3"
+                            Background="#101D2A">
+                        <Image x:Name="ThumbnailPreviewImage"
+                               Stretch="UniformToFill"
+                               SnapsToDevicePixels="True" />
+                    </Border>
+                    <Border x:Name="ThumbnailLoadingOverlay"
+                            Grid.Row="0"
+                            Background="#D90B1119">
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <ProgressBar Width="112"
+                                         Height="3"
+                                         IsIndeterminate="True"
+                                         Foreground="{StaticResource PrimaryBrush}" />
+                            <TextBlock Margin="0,9,0,0"
+                                       FontSize="11"
+                                       Foreground="{StaticResource MutedTextBrush}"
+                                       Text="サムネイルを準備中" />
+                        </StackPanel>
+                    </Border>
+                    <TextBlock x:Name="ThumbnailTimeText"
+                               Grid.Row="1"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               FontFamily="Cascadia Mono, Consolas"
+                               FontSize="13"
+                               Text="00:00:00" />
+                </Grid>
+            </Border>
+        </Popup>
 
         <Border x:Name="NotificationBorder"
                 Grid.Row="3"

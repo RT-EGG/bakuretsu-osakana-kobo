@@ -10,7 +10,7 @@ internal sealed class LibVlcThumbnailFrameExtractor(Action<Exception>? callbackE
     private const int OutputWidth = 320;
     private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan DecoderShutdownDelay = TimeSpan.FromMilliseconds(150);
-    private static readonly TimeSpan CooperativeDelay = TimeSpan.FromMilliseconds(25);
+    private static readonly TimeSpan CooperativeDelay = TimeSpan.FromMilliseconds(50);
 
     public async Task ExtractAsync(
         ThumbnailGenerationRun run,
@@ -53,40 +53,66 @@ internal sealed class LibVlcThumbnailFrameExtractor(Action<Exception>? callbackE
         try
         {
             var duration = media.Duration > 0 ? media.Duration : run.DurationMilliseconds;
-            var thumbnailCount = checked((int)Math.Ceiling(100 / run.IntervalPercent));
-            for (var index = 0; index < thumbnailCount; index++)
+            var backgroundTargets = CreateBackgroundTargets(duration, run.IntervalPercent);
+            var capturedTargets = new HashSet<long>();
+            var firstCapture = sink.RequestFrame(cancellationToken);
+            if (!player.Play(media))
+            {
+                throw new InvalidOperationException("LibVLC could not start thumbnail extraction.");
+            }
+
+            var firstPixels = await WaitForFrameAsync(
+                    firstCapture,
+                    playbackError.Task,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            player.SetPause(true);
+            AddFrame(0, firstPixels);
+            capturedTargets.Add(0);
+
+            var nextBackgroundIndex = 1;
+            while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var fraction = Math.Min(0.999_999, index * run.IntervalPercent / 100);
-                var target = Math.Min(duration - 1, Math.Max(0, (long)Math.Round(duration * fraction)));
-                byte[] pixels;
-
-                if (index == 0)
+                long target;
+                if (run.TryTakePriority(out var priorityTarget) &&
+                    !capturedTargets.Contains(priorityTarget))
                 {
-                    var capture = sink.RequestFrame(cancellationToken);
-                    if (!player.Play(media))
-                    {
-                        throw new InvalidOperationException("LibVLC could not start thumbnail extraction.");
-                    }
-
-                    pixels = await WaitForFrameAsync(capture, playbackError.Task, cancellationToken)
-                        .ConfigureAwait(false);
+                    target = priorityTarget;
                 }
                 else
                 {
-                    player.SetPause(true);
-                    player.Time = target;
-                    player.SetPause(false);
-                    await WaitForPlaybackClockAsync(player, target, playbackError.Task, cancellationToken)
-                        .ConfigureAwait(false);
-                    pixels = await WaitForFrameAsync(
-                            sink.RequestFrame(cancellationToken),
-                            playbackError.Task,
-                            cancellationToken)
-                        .ConfigureAwait(false);
+                    while (nextBackgroundIndex < backgroundTargets.Length &&
+                           capturedTargets.Contains(backgroundTargets[nextBackgroundIndex]))
+                    {
+                        nextBackgroundIndex++;
+                    }
+
+                    if (nextBackgroundIndex >= backgroundTargets.Length)
+                    {
+                        break;
+                    }
+
+                    target = backgroundTargets[nextBackgroundIndex++];
                 }
 
+                player.Time = target;
+                player.SetPause(false);
+                await WaitForPlaybackClockAsync(player, target, playbackError.Task, cancellationToken)
+                    .ConfigureAwait(false);
+                var pixels = await WaitForFrameAsync(
+                        sink.RequestFrame(cancellationToken),
+                        playbackError.Task,
+                        cancellationToken)
+                    .ConfigureAwait(false);
                 player.SetPause(true);
+                AddFrame(target, pixels);
+                capturedTargets.Add(target);
+
+                await Task.Delay(CooperativeDelay, cancellationToken).ConfigureAwait(false);
+            }
+
+            void AddFrame(long target, byte[] pixels) =>
                 frameReady(new ThumbnailFrame(
                     target,
                     Math.Max(0, player.Time),
@@ -94,9 +120,6 @@ internal sealed class LibVlcThumbnailFrameExtractor(Action<Exception>? callbackE
                     outputHeight,
                     checked(OutputWidth * 4),
                     pixels));
-
-                await Task.Delay(CooperativeDelay, cancellationToken).ConfigureAwait(false);
-            }
         }
         finally
         {
@@ -124,6 +147,19 @@ internal sealed class LibVlcThumbnailFrameExtractor(Action<Exception>? callbackE
                 sink.Dispose();
             }
         }
+    }
+
+    private static long[] CreateBackgroundTargets(long durationMilliseconds, double intervalPercent)
+    {
+        var maximumSlot = checked((int)Math.Ceiling(100 / intervalPercent));
+        return Enumerable.Range(0, maximumSlot + 1)
+            .Select(slot => Math.Clamp(
+                (long)Math.Round(
+                    durationMilliseconds * Math.Min(100, slot * intervalPercent) / 100),
+                0,
+                Math.Max(0, durationMilliseconds - 1)))
+            .Distinct()
+            .ToArray();
     }
 
     private static async Task<byte[]> WaitForFrameAsync(

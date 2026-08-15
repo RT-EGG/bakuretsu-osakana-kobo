@@ -109,6 +109,22 @@ public sealed class ThumbnailGenerationServiceTests
             service.StartSession("after-stop.mp4", 10_000, 1));
     }
 
+    [Fact]
+    public void PriorityRequestKeepsNewestUncachedTarget()
+    {
+        var run = new ThumbnailGenerationRun(1, Path.GetFullPath("video.mp4"), 10_000, 1);
+        run.RequestPriority(2_000);
+        run.RequestPriority(3_000);
+
+        Assert.True(run.TryTakePriority(out var target));
+        Assert.Equal(3_000, target);
+        Assert.False(run.TryTakePriority(out _));
+
+        run.Add(CreateFrame(4_000, 4_000));
+        run.RequestPriority(4_000);
+        Assert.False(run.TryTakePriority(out _));
+    }
+
     private static ThumbnailFrame CreateFrame(long targetMilliseconds, long observedMilliseconds) =>
         new(targetMilliseconds, observedMilliseconds, 1, 1, 4, [0, 0, 0, 255]);
 

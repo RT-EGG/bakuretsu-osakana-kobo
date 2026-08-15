@@ -65,6 +65,7 @@ public partial class App : Application
         var recentFiles = await InitializeRecentFilesAsync(paths, _errorReporter);
         var playlist = await InitializePlaylistAsync(paths, _errorReporter);
         IPlaybackBackend? playbackBackend = null;
+        IThumbnailGenerationService? thumbnailGenerationService = null;
         try
         {
             playbackBackend = new LibVlcPlaybackBackend(ReportPlaybackCallbackException);
@@ -81,6 +82,22 @@ public partial class App : Application
                 exception);
         }
 
+        if (playbackBackend is not null)
+        {
+            try
+            {
+                thumbnailGenerationService = new ThumbnailGenerationService(ReportPlaybackCallbackException);
+            }
+            catch (Exception exception)
+            {
+                _errorReporter.ReportDiagnostic(
+                    DiagnosticSeverity.Warning,
+                    "thumbnail-generation-initialization-failed",
+                    exception.Message,
+                    exception);
+            }
+        }
+
         window.ConfigureServices(
             paths,
             _errorReporter,
@@ -88,7 +105,8 @@ public partial class App : Application
             videoProfiles,
             recentFiles,
             playlist,
-            appSettings);
+            appSettings,
+            thumbnailGenerationService);
         _singleInstanceCoordinator.Diagnostic += SingleInstanceCoordinator_OnDiagnostic;
         RegisterGlobalErrorHandlers();
         window.Show();

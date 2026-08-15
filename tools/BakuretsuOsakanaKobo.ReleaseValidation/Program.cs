@@ -29,6 +29,11 @@ internal static class Program
             return 2;
         }
 
+        if (Environment.GetEnvironmentVariable("BOK_THUMBNAIL_WORKER_VALIDATION") == "1")
+        {
+            return RunThumbnailWorkerValidationAsync(args[0], args[1]).GetAwaiter().GetResult();
+        }
+
         var processClock = Stopwatch.StartNew();
         var validateProfiles = Environment.GetEnvironmentVariable("BOK_VIDEO_PROFILE_VALIDATION") == "1";
         var validateGestures = Environment.GetEnvironmentVariable("BOK_GESTURE_VALIDATION") == "1";
@@ -479,6 +484,87 @@ internal static class Program
         }
 
         return exitCode;
+    }
+
+    private static async Task<int> RunThumbnailWorkerValidationAsync(
+        string videoPath,
+        string reportPath)
+    {
+        var fullVideoPath = Path.GetFullPath(videoPath);
+        var errors = new ConcurrentQueue<string>();
+        const long durationHint = 1;
+
+        var generationFailures = new ConcurrentQueue<string>();
+        await using var service = new ThumbnailGenerationService(
+            exception => errors.Enqueue(exception.Message));
+        service.GenerationFailed += (_, eventArgs) =>
+            generationFailures.Enqueue(eventArgs.Exception.Message);
+
+        var cancellationClock = Stopwatch.StartNew();
+        var cancelledRun = service.StartSession(fullVideoPath, durationHint, 0.25);
+        await WaitUntilAsync(
+            () => cancelledRun.Count >= 1,
+            TimeSpan.FromSeconds(10),
+            "The first thumbnail session did not produce a frame.");
+        Console.WriteLine("First thumbnail received; replacing session.");
+        var completedRun = service.StartSession(fullVideoPath, durationHint, 5);
+        await AssertCanceledAsync(cancelledRun.Completion, TimeSpan.FromSeconds(5));
+        var cancellationMilliseconds = cancellationClock.Elapsed.TotalMilliseconds;
+        Console.WriteLine($"First session cancelled in {cancellationMilliseconds:0.0} ms.");
+        await completedRun.Completion.WaitAsync(TimeSpan.FromSeconds(60));
+        Console.WriteLine("Replacement thumbnail session completed.");
+
+        var frames = completedRun.GetSnapshot();
+        Ensure(frames.Count == 20, $"Expected 20 cached thumbnails, got {frames.Count}.");
+        Ensure(frames.All(frame => frame.Width == 320), "A cached thumbnail had an unexpected width.");
+        Ensure(frames.All(frame => frame.BgraPixels.Length == frame.Stride * frame.Height),
+            "A cached thumbnail had an invalid BGRA buffer length.");
+        Ensure(frames.Select(frame => Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(frame.BgraPixels)))
+            .Distinct(StringComparer.Ordinal)
+            .Count() > 1,
+            "The generated thumbnail cache did not contain distinct images.");
+        Ensure(generationFailures.IsEmpty, string.Join(" | ", generationFailures));
+
+        var stopClock = Stopwatch.StartNew();
+        await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var stopMilliseconds = stopClock.Elapsed.TotalMilliseconds;
+        Ensure(errors.IsEmpty, string.Join(" | ", errors));
+
+        var report = new
+        {
+            success = true,
+            video = fullVideoPath,
+            observedDurationEstimateMilliseconds = (long)Math.Round(frames.Last().TargetMilliseconds / 0.95),
+            cancelledGenerationId = cancelledRun.GenerationId,
+            cancelledFrameCount = cancelledRun.Count,
+            cancellationMilliseconds,
+            completedGenerationId = completedRun.GenerationId,
+            completedFrameCount = frames.Count,
+            firstTargetMilliseconds = frames.First().TargetMilliseconds,
+            lastTargetMilliseconds = frames.Last().TargetMilliseconds,
+            width = frames.First().Width,
+            height = frames.First().Height,
+            stopMilliseconds,
+            generationFailureCount = generationFailures.Count,
+            callbackFailureCount = errors.Count,
+        };
+        WriteReport(reportPath, report);
+        Console.WriteLine(JsonSerializer.Serialize(report));
+        return 0;
+    }
+
+    private static async Task AssertCanceledAsync(Task task, TimeSpan timeout)
+    {
+        try
+        {
+            await task.WaitAsync(timeout);
+            throw new InvalidOperationException("The replaced thumbnail session completed instead of cancelling.");
+        }
+        catch (OperationCanceledException)
+        {
+        }
     }
 
     private static async Task<ThumbnailSettingsValidation> ValidateThumbnailSettingsAsync(

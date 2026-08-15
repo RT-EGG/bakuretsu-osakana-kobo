@@ -35,6 +35,8 @@ public partial class MainWindow : Window
 
     internal ThumbnailGenerationSession? ThumbnailSession => _thumbnailSession;
 
+    internal ThumbnailGenerationRun? ThumbnailGenerationRun => _thumbnailGenerationRun;
+
     private readonly DispatcherTimer _playbackTimelineTimer;
     private readonly DispatcherTimer _videoProfileSaveTimer;
     private readonly DispatcherTimer _temporaryPlaybackRateTimer;
@@ -49,6 +51,7 @@ public partial class MainWindow : Window
     private RecentFileRepository? _recentFiles;
     private PlaylistRepository? _playlist;
     private AppSettingsRepository? _appSettings;
+    private IThumbnailGenerationService? _thumbnailGenerationService;
     private PlaylistWindow? _playlistWindow;
     private CancellationTokenSource? _openCancellation;
     private Task? _openTask;
@@ -66,6 +69,8 @@ public partial class MainWindow : Window
     private Task<JsonSaveResult>? _appSettingsMutationTask;
     private double _thumbnailIntervalPercent = ThumbnailGenerationInterval.DefaultPercent;
     private ThumbnailGenerationSession? _thumbnailSession;
+    private ThumbnailGenerationRun? _thumbnailGenerationRun;
+    private Task? _thumbnailStopTask;
     private int? _playlistCurrentIndex;
     private readonly HashSet<int> _playlistLoadErrorIndices = [];
     private int _isOpeningPlaylistCandidate;
@@ -118,7 +123,8 @@ public partial class MainWindow : Window
         VideoProfileRepository? videoProfiles = null,
         RecentFileRepository? recentFiles = null,
         PlaylistRepository? playlist = null,
-        AppSettingsRepository? appSettings = null)
+        AppSettingsRepository? appSettings = null,
+        IThumbnailGenerationService? thumbnailGenerationService = null)
     {
         _paths = paths;
         _errorReporter = errorReporter;
@@ -127,6 +133,7 @@ public partial class MainWindow : Window
         _recentFiles = recentFiles;
         _playlist = playlist;
         _appSettings = appSettings;
+        _thumbnailGenerationService = thumbnailGenerationService;
         _thumbnailIntervalPercent = appSettings?.GetSnapshot().ThumbnailIntervalPercent ??
                                     ThumbnailGenerationInterval.DefaultPercent;
         OpenVideoMenuItem.IsEnabled = playbackBackend is not null;
@@ -144,6 +151,11 @@ public partial class MainWindow : Window
             playbackBackend.StateChanged += PlaybackBackend_OnStateChanged;
             playbackBackend.PlaybackEnded += PlaybackBackend_OnPlaybackEnded;
             _playbackTimelineTimer.Start();
+        }
+
+        if (thumbnailGenerationService is not null)
+        {
+            thumbnailGenerationService.GenerationFailed += ThumbnailGenerationService_OnGenerationFailed;
         }
 
         UpdatePlaybackButton();
@@ -898,6 +910,14 @@ public partial class MainWindow : Window
                 _thumbnailSession = ThumbnailGenerationSession.Create(
                     path,
                     _thumbnailIntervalPercent);
+                if (_thumbnailGenerationService is not null &&
+                    _playbackBackend.LengthMilliseconds > 0)
+                {
+                    _thumbnailGenerationRun = _thumbnailGenerationService.StartSession(
+                        _thumbnailSession.VideoPath,
+                        _playbackBackend.LengthMilliseconds,
+                        _thumbnailSession.IntervalPercent);
+                }
                 _playlistWindow?.UpdateCurrentMedia(path);
                 await RecordRecentFileAsync(path);
             }
@@ -1089,6 +1109,18 @@ public partial class MainWindow : Window
         HandlePlaybackError(eventArgs, isPlaylistCandidate);
     }
 
+    private void ThumbnailGenerationService_OnGenerationFailed(
+        object? sender,
+        ThumbnailGenerationErrorEventArgs eventArgs)
+    {
+        _errorReporter?.ReportDiagnostic(
+            DiagnosticSeverity.Warning,
+            "thumbnail-generation-failed",
+            eventArgs.Exception.Message,
+            eventArgs.Exception,
+            eventArgs.VideoPath);
+    }
+
     private void HandlePlaybackError(
         PlaybackErrorEventArgs eventArgs,
         bool isPlaylistCandidate)
@@ -1150,12 +1182,14 @@ public partial class MainWindow : Window
                 VideoContextMenu.IsOpen = false;
                 _openCancellation?.Cancel();
                 _videoProfileSaveTimer.Stop();
+                _thumbnailStopTask = _thumbnailGenerationService?.StopAsync();
                 _ = CloseAfterPendingWorkCompletesAsync(
                     _openTask,
                     _recentFileMutationTask,
                     _playlistMutationTask,
                     _playlistAdvanceTask,
-                    _appSettingsMutationTask);
+                    _appSettingsMutationTask,
+                    _thumbnailStopTask);
             }
 
             return;
@@ -1200,6 +1234,12 @@ public partial class MainWindow : Window
         }
 
         VideoView.MediaPlayer = null;
+        if (_thumbnailGenerationService is not null)
+        {
+            _thumbnailGenerationService.GenerationFailed -= ThumbnailGenerationService_OnGenerationFailed;
+            _thumbnailGenerationService.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            _thumbnailGenerationService = null;
+        }
         _playbackBackend?.Dispose();
         _playbackBackend = null;
         _videoProfiles?.Dispose();
@@ -1211,6 +1251,7 @@ public partial class MainWindow : Window
         _appSettings?.Dispose();
         _appSettings = null;
         _thumbnailSession = null;
+        _thumbnailGenerationRun = null;
         base.OnClosed(e);
     }
 
@@ -1412,7 +1453,8 @@ public partial class MainWindow : Window
         Task? recentFileMutationTask,
         Task? playlistMutationTask,
         Task? playlistAdvanceTask,
-        Task? appSettingsMutationTask)
+        Task? appSettingsMutationTask,
+        Task? thumbnailStopTask)
     {
         // OnClosing must return before Close is requested again when there is no pending work.
         await Dispatcher.Yield(DispatcherPriority.Background);
@@ -1422,6 +1464,7 @@ public partial class MainWindow : Window
         await IgnoreReportedPendingFailureAsync(playlistMutationTask);
         await IgnoreReportedPendingFailureAsync(playlistAdvanceTask);
         await IgnoreReportedPendingFailureAsync(appSettingsMutationTask);
+        await IgnoreReportedPendingFailureAsync(thumbnailStopTask);
 
         try
         {

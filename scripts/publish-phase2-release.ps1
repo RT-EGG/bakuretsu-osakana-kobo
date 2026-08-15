@@ -106,7 +106,15 @@ if ((Get-FileHash -Algorithm SHA256 -LiteralPath $lgplText).Hash -ne $expectedLg
 }
 $nAudioMitText = Join-Path $releaseAssets 'licenses\NAudio-MIT.txt'
 $expectedNAudioMitSha256 = '809820EA40A37C228470E47C1534332C2B8993157A8AEF3E74F196E917A67907'
-if ((Get-FileHash -Algorithm SHA256 -LiteralPath $nAudioMitText).Hash -ne $expectedNAudioMitSha256) {
+$nAudioMitContent = [IO.File]::ReadAllText($nAudioMitText).Replace("`r`n", "`n")
+$nAudioMitSha256 = [Security.Cryptography.SHA256]::Create()
+try {
+    $actualNAudioMitSha256 = [BitConverter]::ToString(
+        $nAudioMitSha256.ComputeHash([Text.UTF8Encoding]::new($false).GetBytes($nAudioMitContent))).Replace('-', '')
+} finally {
+    $nAudioMitSha256.Dispose()
+}
+if ($actualNAudioMitSha256 -ne $expectedNAudioMitSha256) {
     throw 'The bundled NAudio MIT notice does not match the reviewed text.'
 }
 

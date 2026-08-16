@@ -3,8 +3,7 @@ namespace BakuretsuOsakanaKobo;
 public sealed record PlaybackTimelinePresentation(
     bool IsSeekEnabled,
     double NormalizedPosition,
-    string TimeText,
-    string SeekToolTip)
+    string TimeText)
 {
     public const string UnknownTimeText = "--:--:-- / --:--:--";
 
@@ -17,25 +16,24 @@ public sealed record PlaybackTimelinePresentation(
     {
         if (!hasMedia)
         {
-            return Unavailable("動画を開くとシークできます");
+            return Unavailable();
         }
 
         if (isLoading)
         {
-            return Unavailable("動画を読み込んでいます");
+            return Unavailable();
         }
 
         if (lengthMilliseconds <= 0)
         {
-            return Unavailable("動画の長さを取得できないためシークできません");
+            return Unavailable();
         }
 
         var clampedTime = Math.Clamp(timeMilliseconds, 0, lengthMilliseconds);
         return new PlaybackTimelinePresentation(
             isSeekable,
             (double)clampedTime / lengthMilliseconds,
-            $"{FormatMilliseconds(clampedTime)} / {FormatMilliseconds(lengthMilliseconds)}",
-            isSeekable ? "再生位置" : "この動画はシークできません");
+            $"{FormatMilliseconds(clampedTime)} / {FormatMilliseconds(lengthMilliseconds)}");
     }
 
     public static string FormatMilliseconds(long milliseconds)
@@ -47,6 +45,6 @@ public sealed record PlaybackTimelinePresentation(
         return $"{hours:D2}:{minutes:D2}:{seconds:D2}";
     }
 
-    private static PlaybackTimelinePresentation Unavailable(string toolTip) =>
-        new(false, 0, UnknownTimeText, toolTip);
+    private static PlaybackTimelinePresentation Unavailable() =>
+        new(false, 0, UnknownTimeText);
 }

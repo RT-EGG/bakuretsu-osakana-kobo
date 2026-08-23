@@ -16,6 +16,7 @@ public sealed class AppSettingsRepositoryTests
         Assert.True(result.UsedDefault);
         Assert.Equal(1.0, repository.GetSnapshot().ThumbnailIntervalPercent);
         Assert.Equal(15, repository.GetSnapshot().ThumbnailPreviewWidthPercent);
+        Assert.Null(repository.GetSnapshot().LastAutomaticUpdateCheckAttemptUtc);
     }
 
     [Theory]
@@ -193,6 +194,41 @@ public sealed class AppSettingsRepositoryTests
         using var reloaded = new AppSettingsRepository(filePath);
         Assert.False((await reloaded.LoadAsync()).UsedDefault);
         Assert.Equal(2.25, reloaded.GetSnapshot().ThumbnailIntervalPercent);
+    }
+
+    [Fact]
+    public async Task RecordAutomaticUpdateCheckAttemptAsync_RoundTripsAndPreservesThumbnailSettings()
+    {
+        using var directory = new TestDirectory();
+        var filePath = Path.Combine(directory.Path, "data", "settings.json");
+        var attemptedAt = new DateTimeOffset(2026, 8, 23, 12, 34, 56, TimeSpan.Zero);
+        using (var repository = new AppSettingsRepository(filePath))
+        {
+            await repository.LoadAsync();
+            Assert.True((await repository.SetThumbnailSettingsAsync(2.25, 20)).Success);
+            Assert.True((await repository.RecordAutomaticUpdateCheckAttemptAsync(attemptedAt)).Success);
+        }
+
+        using var reloaded = new AppSettingsRepository(filePath);
+        Assert.False((await reloaded.LoadAsync()).UsedDefault);
+        var snapshot = reloaded.GetSnapshot();
+        Assert.Equal(2.25, snapshot.ThumbnailIntervalPercent);
+        Assert.Equal(20, snapshot.ThumbnailPreviewWidthPercent);
+        Assert.Equal(attemptedAt, snapshot.LastAutomaticUpdateCheckAttemptUtc);
+    }
+
+    [Fact]
+    public async Task RecordAutomaticUpdateCheckAttemptAsync_RejectsNonUtcTimestamp()
+    {
+        using var directory = new TestDirectory();
+        using var repository = CreateRepository(directory.Path);
+        await repository.LoadAsync();
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            repository.RecordAutomaticUpdateCheckAttemptAsync(
+                new DateTimeOffset(2026, 8, 23, 21, 0, 0, TimeSpan.FromHours(9))));
+
+        Assert.Null(repository.GetSnapshot().LastAutomaticUpdateCheckAttemptUtc);
     }
 
     [Fact]

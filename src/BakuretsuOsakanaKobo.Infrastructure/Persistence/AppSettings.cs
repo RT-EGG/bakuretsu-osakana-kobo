@@ -10,12 +10,16 @@ public sealed class AppSettings
 
     public double? ThumbnailPreviewWidthPercent { get; init; }
 
+    public DateTimeOffset? LastAutomaticUpdateCheckAttemptUtc { get; init; }
+
     public static bool IsValid(AppSettings settings) =>
         settings.SchemaVersion == CurrentSchemaVersion &&
         (settings.ThumbnailIntervalPercent is null ||
          ThumbnailGenerationInterval.IsValid(settings.ThumbnailIntervalPercent.Value)) &&
         (settings.ThumbnailPreviewWidthPercent is null ||
-         ThumbnailPreviewSize.IsValid(settings.ThumbnailPreviewWidthPercent.Value));
+         ThumbnailPreviewSize.IsValid(settings.ThumbnailPreviewWidthPercent.Value)) &&
+        (settings.LastAutomaticUpdateCheckAttemptUtc is null ||
+         settings.LastAutomaticUpdateCheckAttemptUtc.Value.Offset == TimeSpan.Zero);
 }
 
 public static class ThumbnailPreviewSize

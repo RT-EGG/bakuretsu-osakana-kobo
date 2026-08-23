@@ -1,3 +1,4 @@
+using System.Net.Http;
 using System.Threading.Channels;
 using System.Windows;
 using System.Windows.Threading;
@@ -24,6 +25,7 @@ public partial class App : Application
     private readonly TaskCompletionSource _initialLaunchHandled =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Task? _secondaryLaunchTask;
+    private HttpClient? _updateHttpClient;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -106,7 +108,9 @@ public partial class App : Application
             recentFiles,
             playlist,
             appSettings,
-            thumbnailGenerationService);
+            thumbnailGenerationService,
+            CreateUpdateCheckService(_errorReporter, out var currentVersion),
+            currentVersion);
         _singleInstanceCoordinator.Diagnostic += SingleInstanceCoordinator_OnDiagnostic;
         RegisterGlobalErrorHandlers();
         window.Show();
@@ -123,6 +127,7 @@ public partial class App : Application
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
         await _initialLaunchHandled.Task;
+        window.StartAutomaticUpdateCheck();
 
         if (logResult.Exception is not null)
         {
@@ -157,8 +162,30 @@ public partial class App : Application
             "The application is exiting."));
         _diagnosticLog?.Dispose();
         _diagnosticLog = null;
+        _updateHttpClient?.Dispose();
+        _updateHttpClient = null;
         _secondaryLaunchCancellation.Dispose();
         base.OnExit(e);
+    }
+
+    private IUpdateCheckService? CreateUpdateCheckService(
+        ErrorReporter errorReporter,
+        out SemanticVersion? currentVersion)
+    {
+        if (!ApplicationInfo.TryGetCurrentSemanticVersion(out currentVersion) || currentVersion is null)
+        {
+            errorReporter.ReportDiagnostic(
+                DiagnosticSeverity.Warning,
+                "application-version-invalid",
+                "The assembly informational version was not a valid semantic version; update checks are disabled.");
+            return null;
+        }
+
+        _updateHttpClient = new HttpClient
+        {
+            Timeout = TimeSpan.FromSeconds(15),
+        };
+        return new GitHubReleaseClient(_updateHttpClient);
     }
 
     private Task HandleSecondaryLaunchRequestAsync(LaunchRequest request)

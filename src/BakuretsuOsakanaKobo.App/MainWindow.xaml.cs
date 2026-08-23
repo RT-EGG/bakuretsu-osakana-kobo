@@ -58,6 +58,8 @@ public partial class MainWindow : Window
     private PlaylistRepository? _playlist;
     private AppSettingsRepository? _appSettings;
     private IThumbnailGenerationService? _thumbnailGenerationService;
+    private IUpdateCheckService? _updateCheckService;
+    private SemanticVersion? _currentVersion;
     private PlaylistWindow? _playlistWindow;
     private CancellationTokenSource? _openCancellation;
     private Task? _openTask;
@@ -78,6 +80,8 @@ public partial class MainWindow : Window
     private ThumbnailGenerationSession? _thumbnailSession;
     private ThumbnailGenerationRun? _thumbnailGenerationRun;
     private Task? _thumbnailStopTask;
+    private readonly CancellationTokenSource _updateCheckCancellation = new();
+    private Task? _updateCheckTask;
     private long _pendingThumbnailGenerationId;
     private long _pendingThumbnailTargetMilliseconds = -1;
     private int? _playlistCurrentIndex;
@@ -133,7 +137,9 @@ public partial class MainWindow : Window
         RecentFileRepository? recentFiles = null,
         PlaylistRepository? playlist = null,
         AppSettingsRepository? appSettings = null,
-        IThumbnailGenerationService? thumbnailGenerationService = null)
+        IThumbnailGenerationService? thumbnailGenerationService = null,
+        IUpdateCheckService? updateCheckService = null,
+        SemanticVersion? currentVersion = null)
     {
         _paths = paths;
         _errorReporter = errorReporter;
@@ -143,6 +149,8 @@ public partial class MainWindow : Window
         _playlist = playlist;
         _appSettings = appSettings;
         _thumbnailGenerationService = thumbnailGenerationService;
+        _updateCheckService = updateCheckService;
+        _currentVersion = currentVersion;
         var settingsSnapshot = appSettings?.GetSnapshot();
         _thumbnailIntervalPercent = settingsSnapshot?.ThumbnailIntervalPercent ??
                                     ThumbnailGenerationInterval.DefaultPercent;
@@ -150,6 +158,7 @@ public partial class MainWindow : Window
                                         ThumbnailPreviewSize.DefaultPercent;
         OpenVideoMenuItem.IsEnabled = playbackBackend is not null;
         ThumbnailSettingsMenuItem.IsEnabled = appSettings is not null;
+        CheckForUpdatesMenuItem.IsEnabled = updateCheckService is not null && currentVersion is not null;
         RebuildRecentFilesMenu();
 
         if (playbackBackend is LibVlcPlaybackBackend libVlcBackend)
@@ -174,6 +183,29 @@ public partial class MainWindow : Window
         UpdatePlaybackTimeline();
         UpdateVolumeControls();
         UpdatePlaybackRateControls();
+    }
+
+    internal void StartAutomaticUpdateCheck()
+    {
+        if (_closeRequested ||
+            _updateCheckService is null ||
+            _currentVersion is null ||
+            _updateCheckTask is not null)
+        {
+            return;
+        }
+
+        var lastAttemptUtc = _appSettings?.GetSnapshot().LastAutomaticUpdateCheckAttemptUtc;
+        if (!UpdateCheckSchedule.IsAutomaticCheckDue(DateTimeOffset.UtcNow, lastAttemptUtc))
+        {
+            _errorReporter?.ReportDiagnostic(
+                DiagnosticSeverity.Information,
+                "automatic-update-check-skipped",
+                "The automatic update check was skipped because the 24-hour interval has not elapsed.");
+            return;
+        }
+
+        _ = StartUpdateCheckAsync(isAutomatic: true);
     }
 
     internal void ShowNotification(UserNotification notification)
@@ -233,6 +265,232 @@ public partial class MainWindow : Window
     {
         await ShowOpenVideoDialogAsync();
     }
+
+    private async void CheckForUpdatesMenuItem_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        await StartUpdateCheckAsync(isAutomatic: false);
+    }
+
+    private async Task StartUpdateCheckAsync(bool isAutomatic)
+    {
+        var updateCheckService = _updateCheckService;
+        var currentVersion = _currentVersion;
+        if (_closeRequested || updateCheckService is null || currentVersion is null)
+        {
+            return;
+        }
+
+        if (_updateCheckTask is not null)
+        {
+            if (!isAutomatic)
+            {
+                _errorReporter?.Report(
+                    new UserNotification(
+                        UserNotificationSeverity.Information,
+                        "更新を確認中です。",
+                        "確認が完了するまでそのままお待ちください。"),
+                    "update-check-already-running",
+                    "An update check was already running when a manual check was requested.");
+            }
+
+            return;
+        }
+
+        CheckForUpdatesMenuItem.IsEnabled = false;
+        var checkTask = RunUpdateCheckAsync(updateCheckService, currentVersion, isAutomatic);
+        _updateCheckTask = checkTask;
+        try
+        {
+            await checkTask;
+        }
+        finally
+        {
+            if (ReferenceEquals(_updateCheckTask, checkTask))
+            {
+                _updateCheckTask = null;
+            }
+
+            if (!_closeRequested)
+            {
+                CheckForUpdatesMenuItem.IsEnabled = true;
+            }
+        }
+    }
+
+    private async Task RunUpdateCheckAsync(
+        IUpdateCheckService updateCheckService,
+        SemanticVersion currentVersion,
+        bool isAutomatic)
+    {
+        try
+        {
+            if (isAutomatic && _appSettings is { } appSettings)
+            {
+                var attemptedAtUtc = DateTimeOffset.UtcNow;
+                var saveResult = await appSettings.RecordAutomaticUpdateCheckAttemptAsync(
+                    attemptedAtUtc,
+                    _updateCheckCancellation.Token);
+                if (!saveResult.Success)
+                {
+                    _errorReporter?.Report(
+                        new UserNotification(
+                            UserNotificationSeverity.Warning,
+                            "更新確認の時刻を保存できません。",
+                            "更新確認は続行します。アプリの配置先とアクセス権限を確認してください。"),
+                        "update-check-timestamp-save-failed",
+                        saveResult.ErrorMessage ?? "The automatic update check timestamp could not be saved.",
+                        saveResult.Exception,
+                        appSettings.FilePath);
+                }
+            }
+
+            var result = await updateCheckService.CheckAsync(
+                currentVersion,
+                _updateCheckCancellation.Token);
+            if (!_closeRequested)
+            {
+                PresentUpdateCheckResult(result, isAutomatic);
+            }
+        }
+        catch (OperationCanceledException) when (_updateCheckCancellation.IsCancellationRequested)
+        {
+            _errorReporter?.ReportDiagnostic(
+                DiagnosticSeverity.Information,
+                "update-check-cancelled",
+                "The update check was cancelled during application shutdown.");
+        }
+        catch (Exception exception)
+        {
+            _errorReporter?.Report(
+                new UserNotification(
+                    UserNotificationSeverity.Warning,
+                    "更新を確認できませんでした。",
+                    "現在の版はそのまま利用できます。時間を置いてもう一度お試しください。"),
+                "update-check-unexpected-failure",
+                exception.Message,
+                exception);
+        }
+    }
+
+    private void PresentUpdateCheckResult(UpdateCheckResult result, bool isAutomatic)
+    {
+        switch (result.Status)
+        {
+            case UpdateCheckStatus.UpToDate:
+                if (isAutomatic)
+                {
+                    _errorReporter?.ReportDiagnostic(
+                        DiagnosticSeverity.Information,
+                        "update-check-up-to-date",
+                        "The application is up to date.");
+                }
+                else
+                {
+                    _errorReporter?.Report(
+                        new UserNotification(
+                            UserNotificationSeverity.Information,
+                            "現在の版が最新です。",
+                            $"利用中の版: {FormatVersion(_currentVersion)}"),
+                        "update-check-up-to-date",
+                        "The manual update check found no newer release.");
+                }
+
+                break;
+            case UpdateCheckStatus.UpdateAvailable when result.Release is not null:
+                if (isAutomatic)
+                {
+                    _errorReporter?.Report(
+                        new UserNotification(
+                            UserNotificationSeverity.Information,
+                            $"新しい版 {result.Release.TagName} を利用できます。",
+                            "「ヘルプ」→「更新を確認」から詳細を確認できます。"),
+                        "update-available",
+                        $"A newer release {result.Release.TagName} is available.");
+                }
+                else
+                {
+                    ShowAvailableUpdate(result.Release);
+                }
+
+                break;
+            case UpdateCheckStatus.RateLimited:
+                ReportUpdateCheckFailure(
+                    "GitHubの利用制限のため、更新を確認できませんでした。",
+                    "update-check-rate-limited",
+                    result.TechnicalMessage);
+                break;
+            case UpdateCheckStatus.InvalidResponse:
+                ReportUpdateCheckFailure(
+                    "更新情報を安全に確認できませんでした。",
+                    "update-check-invalid-response",
+                    result.TechnicalMessage);
+                break;
+            default:
+                ReportUpdateCheckFailure(
+                    "更新を確認できませんでした。",
+                    "update-check-unavailable",
+                    result.TechnicalMessage);
+                break;
+        }
+    }
+
+    private void ShowAvailableUpdate(UpdateRelease release)
+    {
+        _errorReporter?.ReportDiagnostic(
+            DiagnosticSeverity.Information,
+            "update-available-manual",
+            $"The manual update check found release {release.TagName}.");
+        var summary = UpdateReleaseSummary.Create(release.Body);
+        var result = MessageBox.Show(
+            this,
+            $"新しい版 {release.TagName} を利用できます。\n\n" +
+            $"{summary}\n\n" +
+            "GitHub Releaseページを開きますか？",
+            ApplicationInfo.DisplayName,
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Information);
+        if (result == MessageBoxResult.Yes)
+        {
+            OpenReleasePage(release.ReleasePageUri);
+        }
+    }
+
+    private void OpenReleasePage(Uri releasePageUri)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = releasePageUri.AbsoluteUri,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception exception) when (
+            exception is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            _errorReporter?.Report(
+                new UserNotification(
+                    UserNotificationSeverity.Warning,
+                    "GitHub Releaseページを開けませんでした。",
+                    "ブラウザーでプロジェクトのGitHub Releasesを開いてください。"),
+                "open-update-release-page-failed",
+                exception.Message,
+                exception,
+                releasePageUri.AbsoluteUri);
+        }
+    }
+
+    private void ReportUpdateCheckFailure(string message, string eventName, string? technicalMessage) =>
+        _errorReporter?.Report(
+            new UserNotification(
+                UserNotificationSeverity.Warning,
+                message,
+                "現在の版はそのまま利用できます。時間を置いてもう一度お試しください。"),
+            eventName,
+            string.IsNullOrWhiteSpace(technicalMessage) ? message : technicalMessage);
+
+    private static string FormatVersion(SemanticVersion? version) =>
+        version is null ? "不明" : $"v{version.Major}.{version.Minor}.{version.Patch}";
 
     private async void PlaybackErrorOpenFileButton_OnClick(object sender, RoutedEventArgs e)
     {
@@ -1231,9 +1489,11 @@ public partial class MainWindow : Window
                 RecentFilesMenuItem.IsEnabled = false;
                 PlaylistMenuItem.IsEnabled = false;
                 ThumbnailSettingsMenuItem.IsEnabled = false;
+                CheckForUpdatesMenuItem.IsEnabled = false;
                 _playlistWindow?.DisablePersistenceControls();
                 VideoContextMenu.IsOpen = false;
                 _openCancellation?.Cancel();
+                _updateCheckCancellation.Cancel();
                 _videoProfileSaveTimer.Stop();
                 _thumbnailStopTask = _thumbnailGenerationService?.StopAsync();
                 _ = CloseAfterPendingWorkCompletesAsync(
@@ -1242,7 +1502,8 @@ public partial class MainWindow : Window
                     _playlistMutationTask,
                     _playlistAdvanceTask,
                     _appSettingsMutationTask,
-                    _thumbnailStopTask);
+                    _thumbnailStopTask,
+                    _updateCheckTask);
             }
 
             return;
@@ -1304,6 +1565,9 @@ public partial class MainWindow : Window
         _playlist = null;
         _appSettings?.Dispose();
         _appSettings = null;
+        _updateCheckService = null;
+        _currentVersion = null;
+        _updateCheckCancellation.Dispose();
         _thumbnailSession = null;
         _thumbnailGenerationRun = null;
         base.OnClosed(e);
@@ -1508,7 +1772,8 @@ public partial class MainWindow : Window
         Task? playlistMutationTask,
         Task? playlistAdvanceTask,
         Task? appSettingsMutationTask,
-        Task? thumbnailStopTask)
+        Task? thumbnailStopTask,
+        Task? updateCheckTask)
     {
         // OnClosing must return before Close is requested again when there is no pending work.
         await Dispatcher.Yield(DispatcherPriority.Background);
@@ -1519,6 +1784,7 @@ public partial class MainWindow : Window
         await IgnoreReportedPendingFailureAsync(playlistAdvanceTask);
         await IgnoreReportedPendingFailureAsync(appSettingsMutationTask);
         await IgnoreReportedPendingFailureAsync(thumbnailStopTask);
+        await IgnoreReportedPendingFailureAsync(updateCheckTask);
 
         try
         {

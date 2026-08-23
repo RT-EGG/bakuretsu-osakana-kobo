@@ -7,6 +7,7 @@ public sealed class AppSettingsRepository : IDisposable
     private readonly SemaphoreSlim _saveGate = new(1, 1);
     private double _thumbnailIntervalPercent = ThumbnailGenerationInterval.DefaultPercent;
     private double _thumbnailPreviewWidthPercent = ThumbnailPreviewSize.DefaultPercent;
+    private DateTimeOffset? _lastAutomaticUpdateCheckAttemptUtc;
     private bool _loaded;
     private bool _disposed;
 
@@ -32,6 +33,7 @@ public sealed class AppSettingsRepository : IDisposable
                                         ThumbnailGenerationInterval.DefaultPercent;
             _thumbnailPreviewWidthPercent = result.Value.ThumbnailPreviewWidthPercent ??
                                             ThumbnailPreviewSize.DefaultPercent;
+            _lastAutomaticUpdateCheckAttemptUtc = result.Value.LastAutomaticUpdateCheckAttemptUtc;
             _loaded = true;
         }
 
@@ -71,6 +73,20 @@ public sealed class AppSettingsRepository : IDisposable
                 _thumbnailIntervalPercent = intervalPercent;
                 _thumbnailPreviewWidthPercent = previewWidthPercent;
             },
+            cancellationToken);
+    }
+
+    public Task<JsonSaveResult> RecordAutomaticUpdateCheckAttemptAsync(
+        DateTimeOffset attemptedAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        if (attemptedAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("The update check attempt timestamp must use UTC.", nameof(attemptedAtUtc));
+        }
+
+        return MutateAndSaveAsync(
+            () => _lastAutomaticUpdateCheckAttemptUtc = attemptedAtUtc,
             cancellationToken);
     }
 
@@ -117,11 +133,13 @@ public sealed class AppSettingsRepository : IDisposable
     {
         ThumbnailIntervalPercent = _thumbnailIntervalPercent,
         ThumbnailPreviewWidthPercent = _thumbnailPreviewWidthPercent,
+        LastAutomaticUpdateCheckAttemptUtc = _lastAutomaticUpdateCheckAttemptUtc,
     };
 
     private AppSettingsSnapshot CreateSnapshot() => new(
         _thumbnailIntervalPercent,
-        _thumbnailPreviewWidthPercent);
+        _thumbnailPreviewWidthPercent,
+        _lastAutomaticUpdateCheckAttemptUtc);
 
     private void ThrowIfNotReady()
     {
@@ -137,4 +155,5 @@ public sealed class AppSettingsRepository : IDisposable
 
 public sealed record AppSettingsSnapshot(
     double ThumbnailIntervalPercent,
-    double ThumbnailPreviewWidthPercent);
+    double ThumbnailPreviewWidthPercent,
+    DateTimeOffset? LastAutomaticUpdateCheckAttemptUtc);

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
+using System.Net.Http;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -44,6 +45,11 @@ internal static class Program
         if (Environment.GetEnvironmentVariable("BOK_UPDATE_CHECK_VALIDATION") == "1")
         {
             return RunUpdateCheckValidation(args[1]);
+        }
+
+        if (Environment.GetEnvironmentVariable("BOK_UPDATE_DOWNLOAD_VALIDATION") == "1")
+        {
+            return RunUpdateDownloadValidationAsync(args[1]).GetAwaiter().GetResult();
         }
 
         var processClock = Stopwatch.StartNew();
@@ -621,6 +627,54 @@ internal static class Program
         WriteReport(reportPath, report);
         Console.WriteLine(JsonSerializer.Serialize(report));
         return 0;
+    }
+
+    private static async Task<int> RunUpdateDownloadValidationAsync(string reportPath)
+    {
+        var fullReportPath = Path.GetFullPath(reportPath);
+        var workingRoot = $"{fullReportPath}.downloads";
+        try
+        {
+            Ensure(SemanticVersion.TryParse("1.0.0", out var currentVersion) && currentVersion is not null,
+                "The update-download validation version was invalid.");
+            using var httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
+            var check = await new GitHubReleaseClient(httpClient).CheckAsync(currentVersion!);
+            Ensure(check.Status == UpdateCheckStatus.UpdateAvailable && check.Release is not null,
+                $"The public latest release was not available for download validation: {check.Status}");
+            var release = check.Release!;
+            var result = await new UpdatePackageDownloader(httpClient).DownloadAsync(
+                release.Asset,
+                workingRoot);
+            Ensure(result.Status == UpdatePackageDownloadStatus.Prepared && result.Package is not null,
+                $"The public update package was not prepared: {result.Status} {result.TechnicalMessage}");
+            var package = result.Package!;
+
+            var report = new
+            {
+                release = release.TagName,
+                asset = release.Asset.Name,
+                archiveBytes = release.Asset.Size,
+                sha256 = release.Asset.Sha256Digest,
+                uncompressedBytes = package.UncompressedBytes,
+                fileCount = package.Files.Count,
+                executablePresent = package.Files.Contains("BakuretsuOsakanaKobo.exe", StringComparer.Ordinal),
+                dataEntryCount = package.Files.Count(path =>
+                    path.StartsWith("data/", StringComparison.OrdinalIgnoreCase)),
+            };
+            Ensure(report.executablePresent, "The public update package did not contain the application executable.");
+            Ensure(report.dataEntryCount == 0, "The public update package contained a data entry.");
+            UpdatePackageDownloader.DeletePreparedPackage(package);
+            WriteReport(fullReportPath, report);
+            Console.WriteLine(JsonSerializer.Serialize(report));
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            var report = new { error = exception.ToString() };
+            WriteReport(fullReportPath, report);
+            Console.Error.WriteLine(JsonSerializer.Serialize(report));
+            return 1;
+        }
     }
 
     private static int RunUpdateCheckValidation(string reportPath)

@@ -3,5 +3,6 @@
   <Project Path="src/BakuretsuOsakanaKobo.Infrastructure/BakuretsuOsakanaKobo.Infrastructure.csproj" />
   <Project Path="src/BakuretsuOsakanaKobo.Playback/BakuretsuOsakanaKobo.Playback.csproj" />
   <Project Path="src/BakuretsuOsakanaKobo.Update/BakuretsuOsakanaKobo.Update.csproj" />
+  <Project Path="src/BakuretsuOsakanaKobo.Updater/BakuretsuOsakanaKobo.Updater.csproj" />
   <Project Path="tests/BakuretsuOsakanaKobo.App.Tests/BakuretsuOsakanaKobo.App.Tests.csproj" />
 </Solution>

@@ -26,10 +26,26 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args is ["--update-parent-probe", var exitSignalPath])
+        {
+            return UpdateProcessValidation.RunParentProbe(exitSignalPath);
+        }
+
+        if (args is ["--update-result", var updateResultPath] &&
+            !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("BOK_UPDATE_RESTART_PROBE")))
+        {
+            return UpdateProcessValidation.RunRestartProbe(updateResultPath);
+        }
+
         if (args.Length != 2)
         {
             Console.Error.WriteLine("Usage: BakuretsuOsakanaKobo.ReleaseValidation <video> <report.json>");
             return 2;
+        }
+
+        if (Environment.GetEnvironmentVariable("BOK_UPDATE_PROCESS_VALIDATION") == "1")
+        {
+            return UpdateProcessValidation.RunAsync(args[0], args[1]).GetAwaiter().GetResult();
         }
 
         if (Environment.GetEnvironmentVariable("BOK_THUMBNAIL_WORKER_VALIDATION") == "1")

@@ -59,6 +59,7 @@ public partial class MainWindow : Window
     private AppSettingsRepository? _appSettings;
     private IThumbnailGenerationService? _thumbnailGenerationService;
     private IUpdateCheckService? _updateCheckService;
+    private UpdateApplicationCoordinator? _applicationUpdateCoordinator;
     private SemanticVersion? _currentVersion;
     private PlaylistWindow? _playlistWindow;
     private CancellationTokenSource? _openCancellation;
@@ -139,7 +140,8 @@ public partial class MainWindow : Window
         AppSettingsRepository? appSettings = null,
         IThumbnailGenerationService? thumbnailGenerationService = null,
         IUpdateCheckService? updateCheckService = null,
-        SemanticVersion? currentVersion = null)
+        SemanticVersion? currentVersion = null,
+        UpdateApplicationCoordinator? applicationUpdateCoordinator = null)
     {
         _paths = paths;
         _errorReporter = errorReporter;
@@ -151,6 +153,7 @@ public partial class MainWindow : Window
         _thumbnailGenerationService = thumbnailGenerationService;
         _updateCheckService = updateCheckService;
         _currentVersion = currentVersion;
+        _applicationUpdateCoordinator = applicationUpdateCoordinator;
         var settingsSnapshot = appSettings?.GetSnapshot();
         _thumbnailIntervalPercent = settingsSnapshot?.ThumbnailIntervalPercent ??
                                     ThumbnailGenerationInterval.DefaultPercent;
@@ -349,7 +352,7 @@ public partial class MainWindow : Window
                 _updateCheckCancellation.Token);
             if (!_closeRequested)
             {
-                PresentUpdateCheckResult(result, isAutomatic);
+                await PresentUpdateCheckResultAsync(result, isAutomatic);
             }
         }
         catch (OperationCanceledException) when (_updateCheckCancellation.IsCancellationRequested)
@@ -372,7 +375,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void PresentUpdateCheckResult(UpdateCheckResult result, bool isAutomatic)
+    private async Task PresentUpdateCheckResultAsync(UpdateCheckResult result, bool isAutomatic)
     {
         switch (result.Status)
         {
@@ -409,7 +412,7 @@ public partial class MainWindow : Window
                 }
                 else
                 {
-                    ShowAvailableUpdate(result.Release);
+                    await ShowAvailableUpdateAsync(result.Release);
                 }
 
                 break;
@@ -434,24 +437,137 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ShowAvailableUpdate(UpdateRelease release)
+    private async Task ShowAvailableUpdateAsync(UpdateRelease release)
     {
         _errorReporter?.ReportDiagnostic(
             DiagnosticSeverity.Information,
             "update-available-manual",
             $"The manual update check found release {release.TagName}.");
         var summary = UpdateReleaseSummary.Create(release.Body);
+        var coordinator = _applicationUpdateCoordinator;
+        var paths = _paths;
+        if (coordinator is null || paths is null)
+        {
+            OfferManualUpdate(release);
+            return;
+        }
+
         var result = MessageBox.Show(
             this,
             $"新しい版 {release.TagName} を利用できます。\n\n" +
             $"{summary}\n\n" +
-            "GitHub Releaseページを開きますか？",
+            "更新をダウンロードして適用しますか？\n" +
+            "準備完了後にアプリを終了し、新しい版を再起動します。",
+            ApplicationInfo.DisplayName,
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+        if (result != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        ShowNotification(new UserNotification(
+            UserNotificationSeverity.Information,
+            $"{release.TagName} をダウンロードしています。",
+            "完了するまでアプリを終了せず、そのままお待ちください。"));
+        var start = await coordinator.DownloadAndLaunchAsync(
+            release,
+            paths.ExecutableDirectory,
+            _updateCheckCancellation.Token);
+        if (_closeRequested)
+        {
+            return;
+        }
+
+        if (start.Status == ApplicationUpdateStartStatus.Launched)
+        {
+            _errorReporter?.ReportDiagnostic(
+                DiagnosticSeverity.Information,
+                "update-helper-ready",
+                $"The update helper accepted release {release.TagName}; normal application shutdown is starting.");
+            Close();
+            return;
+        }
+
+        var message = start.Status switch
+        {
+            ApplicationUpdateStartStatus.InsufficientSpace => "更新に必要な空き容量がありません。",
+            ApplicationUpdateStartStatus.InvalidPackage => "更新ファイルを安全に確認できませんでした。",
+            ApplicationUpdateStartStatus.HelperUnavailable or ApplicationUpdateStartStatus.HelperLaunchFailed =>
+                "更新用プログラムを起動できませんでした。",
+            _ => "更新を準備できませんでした。",
+        };
+        _errorReporter?.Report(
+            new UserNotification(
+                UserNotificationSeverity.Warning,
+                message,
+                "現在の版は変更されていません。GitHub Releaseから手動で更新できます。"),
+            "update-prepare-failed",
+            start.TechnicalMessage ?? message,
+            targetPath: release.ReleasePageUri.AbsoluteUri);
+        OfferManualUpdate(release);
+    }
+
+    private void OfferManualUpdate(UpdateRelease release)
+    {
+        var result = MessageBox.Show(
+            this,
+            $"GitHub Releaseページから {release.TagName} を手動でダウンロードできます。\n\n" +
+            "Releaseページを開きますか？",
             ApplicationInfo.DisplayName,
             MessageBoxButton.YesNo,
             MessageBoxImage.Information);
         if (result == MessageBoxResult.Yes)
         {
             OpenReleasePage(release.ReleasePageUri);
+        }
+    }
+
+    internal void PresentApplicationUpdateResult(UpdateStartupReadResult startupResult)
+    {
+        ArgumentNullException.ThrowIfNull(startupResult);
+        if (startupResult.Result is { } result)
+        {
+            if (result.Status == BakuretsuOsakanaKobo.Update.UpdateHelperStatus.Succeeded)
+            {
+                _errorReporter?.Report(
+                    new UserNotification(
+                        UserNotificationSeverity.Information,
+                        "更新が完了しました。",
+                        $"爆裂おさかな工房 {FormatVersion(_currentVersion)} を利用できます。"),
+                    "application-update-succeeded",
+                    "The application update completed and the new version restarted.");
+            }
+            else if (result.Status == BakuretsuOsakanaKobo.Update.UpdateHelperStatus.FailedRolledBack)
+            {
+                _errorReporter?.Report(
+                    new UserNotification(
+                        UserNotificationSeverity.Warning,
+                        "更新に失敗したため、以前の版へ戻しました。",
+                        "現在の版を利用できます。必要に応じてGitHub Releaseから手動で更新してください。"),
+                    "application-update-rolled-back",
+                    result.TechnicalMessage ?? result.Status.ToString());
+            }
+            else
+            {
+                _errorReporter?.Report(
+                    new UserNotification(
+                        UserNotificationSeverity.Warning,
+                        "更新結果を正常に確認できませんでした。",
+                        "起動中の版は利用できます。必要に応じてGitHub Releaseから手動で更新してください。"),
+                    "application-update-result-unexpected",
+                    result.TechnicalMessage ?? result.Status.ToString());
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(startupResult.TechnicalMessage))
+        {
+            _errorReporter?.Report(
+                new UserNotification(
+                    UserNotificationSeverity.Warning,
+                    "更新結果を読み取れませんでした。",
+                    "起動中の版は利用できます。必要に応じてGitHub Releaseを確認してください。"),
+                "application-update-result-invalid",
+                startupResult.TechnicalMessage);
         }
     }
 

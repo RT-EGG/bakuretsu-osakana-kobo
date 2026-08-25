@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net.Http;
 using System.Threading.Channels;
 using System.Windows;
@@ -26,10 +27,13 @@ public partial class App : Application
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Task? _secondaryLaunchTask;
     private HttpClient? _updateHttpClient;
+    private HttpClient? _updateDownloadHttpClient;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        var updateStartupArguments = UpdateStartupResultReader.ExtractArguments(e.Args);
 
         _singleInstanceCoordinator = new SingleInstanceCoordinator();
         if (!_singleInstanceCoordinator.IsPrimary)
@@ -37,7 +41,7 @@ public partial class App : Application
             var forwarded = await _singleInstanceCoordinator.SendAsync(new LaunchRequest
             {
                 SenderProcessId = Environment.ProcessId,
-                FileArguments = e.Args,
+                FileArguments = updateStartupArguments.LaunchArguments,
             });
             Shutdown(forwarded ? 0 : 1);
             return;
@@ -46,8 +50,8 @@ public partial class App : Application
         _singleInstanceCoordinator.RequestReceived += HandleSecondaryLaunchRequestAsync;
         if (!_secondaryLaunchRequests.Writer.TryWrite(new LaunchRequest
             {
-                SenderProcessId = Environment.ProcessId,
-                FileArguments = e.Args,
+            SenderProcessId = Environment.ProcessId,
+            FileArguments = updateStartupArguments.LaunchArguments,
                 IsInitialLaunch = true,
             }))
         {
@@ -62,6 +66,9 @@ public partial class App : Application
         var window = new MainWindow();
         MainWindow = window;
         _errorReporter = new ErrorReporter(_diagnosticLog, new MainWindowNotificationSink(window));
+        var updateStartupResult = await UpdateStartupResultReader.ReadAsync(
+            updateStartupArguments.ResultPath,
+            UpdateApplicationCoordinator.GetDefaultWorkingRoot());
         var appSettings = await InitializeAppSettingsAsync(paths, _errorReporter);
         var videoProfiles = await InitializeVideoProfilesAsync(paths, _errorReporter);
         var recentFiles = await InitializeRecentFilesAsync(paths, _errorReporter);
@@ -110,10 +117,12 @@ public partial class App : Application
             appSettings,
             thumbnailGenerationService,
             CreateUpdateCheckService(_errorReporter, out var currentVersion),
-            currentVersion);
+            currentVersion,
+            CreateApplicationUpdateCoordinator(paths));
         _singleInstanceCoordinator.Diagnostic += SingleInstanceCoordinator_OnDiagnostic;
         RegisterGlobalErrorHandlers();
         window.Show();
+        window.PresentApplicationUpdateResult(updateStartupResult);
 
         _diagnosticLog.Write(new DiagnosticEvent(
             DiagnosticSeverity.Information,
@@ -164,6 +173,8 @@ public partial class App : Application
         _diagnosticLog = null;
         _updateHttpClient?.Dispose();
         _updateHttpClient = null;
+        _updateDownloadHttpClient?.Dispose();
+        _updateDownloadHttpClient = null;
         _secondaryLaunchCancellation.Dispose();
         base.OnExit(e);
     }
@@ -186,6 +197,18 @@ public partial class App : Application
             Timeout = TimeSpan.FromSeconds(15),
         };
         return new GitHubReleaseClient(_updateHttpClient);
+    }
+
+    private UpdateApplicationCoordinator CreateApplicationUpdateCoordinator(PortableDataPaths paths)
+    {
+        _updateDownloadHttpClient = new HttpClient
+        {
+            Timeout = TimeSpan.FromMinutes(10),
+        };
+        return new UpdateApplicationCoordinator(
+            new UpdatePackageDownloader(_updateDownloadHttpClient),
+            Path.Combine(paths.ExecutableDirectory, "updater"),
+            UpdateApplicationCoordinator.GetDefaultWorkingRoot());
     }
 
     private Task HandleSecondaryLaunchRequestAsync(LaunchRequest request)

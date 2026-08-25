@@ -30,6 +30,7 @@
   <ItemGroup>
     <ProjectReference Include="../BakuretsuOsakanaKobo.Infrastructure/BakuretsuOsakanaKobo.Infrastructure.csproj" />
     <ProjectReference Include="../BakuretsuOsakanaKobo.Playback/BakuretsuOsakanaKobo.Playback.csproj" />
+    <ProjectReference Include="../BakuretsuOsakanaKobo.Update/BakuretsuOsakanaKobo.Update.csproj" />
   </ItemGroup>
 
   <ItemGroup>

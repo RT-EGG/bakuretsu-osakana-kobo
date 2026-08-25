@@ -11,7 +11,9 @@ internal static class Program
             return 2;
         }
 
-        var result = await new UpdateHelperHost().RunAsync(args[0]).ConfigureAwait(false);
+        var result = await new UpdateHelperHost(failureNotifier: new WindowsUpdateFailureNotifier())
+            .RunAsync(args[0])
+            .ConfigureAwait(false);
         return result.Status == UpdateHelperStatus.Succeeded ? 0 : 1;
     }
 }

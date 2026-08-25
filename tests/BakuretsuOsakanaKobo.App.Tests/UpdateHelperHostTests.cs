@@ -27,6 +27,7 @@ public sealed class UpdateHelperHostTests
         Assert.False(File.Exists(fixture.ArchivePath));
         Assert.False(Directory.Exists(Path.Combine(fixture.Working, "staged")));
         Assert.True(File.Exists(fixture.ResultPath));
+        Assert.True(File.Exists(Path.Combine(fixture.Working, UpdateHelperHost.ReadyFileName)));
     }
 
     [Fact]
@@ -39,6 +40,7 @@ public sealed class UpdateHelperHostTests
         Assert.Equal(UpdateHelperStatus.ParentExitTimeout, result.Status);
         Assert.False(result.RestartAttempted);
         Assert.Null(fixture.Process.StartedExecutable);
+        Assert.Single(fixture.Notifier.Messages);
         Assert.Equal("old executable", fixture.ReadTarget("BakuretsuOsakanaKobo.exe"));
         Assert.Equal("old library", fixture.ReadTarget("old.dll"));
         Assert.False(File.Exists(fixture.ArchivePath));
@@ -135,6 +137,7 @@ public sealed class UpdateHelperHostTests
             ResultPath = Path.Combine(Working, UpdateHelperHost.ResultFileName);
             var request = new UpdateHelperRequest(
                 1,
+                Guid.NewGuid().ToString("N"),
                 1234,
                 DateTime.UtcNow.Ticks,
                 Target,
@@ -144,9 +147,11 @@ public sealed class UpdateHelperHostTests
             File.WriteAllText(RequestPath, JsonSerializer.Serialize(request, JsonOptions));
 
             Process = new FakeProcessController(waitStatus);
+            Notifier = new RecordingFailureNotifier();
             Host = new UpdateHelperHost(
                 Process,
-                transaction: new UpdateFileTransaction(faultInjector));
+                transaction: new UpdateFileTransaction(faultInjector),
+                failureNotifier: Notifier);
         }
 
         internal string Working { get; }
@@ -160,6 +165,8 @@ public sealed class UpdateHelperHostTests
         internal string ResultPath { get; }
 
         internal FakeProcessController Process { get; }
+
+        internal RecordingFailureNotifier Notifier { get; }
 
         internal UpdateHelperHost Host { get; }
 
@@ -253,8 +260,10 @@ public sealed class UpdateHelperHostTests
 
         public (bool Started, string? TechnicalMessage) StartApplication(
             string executablePath,
-            string workingDirectory)
+            string workingDirectory,
+            string updateResultPath)
         {
+            Assert.True(File.Exists(updateResultPath));
             StartedExecutable = executablePath;
             return (true, null);
         }
@@ -270,5 +279,12 @@ public sealed class UpdateHelperHostTests
                 throw new InvalidOperationException("Injected helper transaction failure.");
             }
         }
+    }
+
+    private sealed class RecordingFailureNotifier : IUpdateFailureNotifier
+    {
+        internal List<string> Messages { get; } = [];
+
+        public void Show(string message) => Messages.Add(message);
     }
 }

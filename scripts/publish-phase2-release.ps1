@@ -16,6 +16,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $project = (Resolve-Path -LiteralPath $ProjectPath).Path
+$updaterProject = Join-Path $repoRoot 'src\BakuretsuOsakanaKobo.Updater\BakuretsuOsakanaKobo.Updater.csproj'
 $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
 $releaseAssets = Join-Path $repoRoot 'release-assets'
 $licenseVerifier = Join-Path $repoRoot 'scripts\verify-libvlc-plugin-licenses.ps1'
@@ -135,6 +136,32 @@ $selfContained = $DistributionMode -eq 'SelfContained'
     -p:PublishSingleFile=false `
     --output $outputRoot
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE." }
+
+$isProductApplication = [IO.Path]::GetFileName($project) -eq 'BakuretsuOsakanaKobo.App.csproj'
+if ($isProductApplication) {
+    $updaterOutput = Join-Path $outputRoot 'updater'
+    & dotnet publish $updaterProject `
+        --configuration Release `
+        --no-restore `
+        --runtime win-x64 `
+        --self-contained $selfContained.ToString().ToLowerInvariant() `
+        -p:PublishSingleFile=false `
+        --output $updaterOutput
+    if ($LASTEXITCODE -ne 0) { throw "Updater publish failed with exit code $LASTEXITCODE." }
+
+    $requiredUpdaterFiles = @(
+        'BakuretsuOsakanaKobo.Updater.exe',
+        'BakuretsuOsakanaKobo.Updater.dll',
+        'BakuretsuOsakanaKobo.Updater.deps.json',
+        'BakuretsuOsakanaKobo.Updater.runtimeconfig.json',
+        'BakuretsuOsakanaKobo.Update.dll'
+    )
+    foreach ($requiredUpdaterFile in $requiredUpdaterFiles) {
+        if (-not (Test-Path -LiteralPath (Join-Path $updaterOutput $requiredUpdaterFile) -PathType Leaf)) {
+            throw "Required updater file was not published: $requiredUpdaterFile"
+        }
+    }
+}
 
 $licenses = Join-Path $outputRoot 'licenses'
 [IO.Directory]::CreateDirectory($licenses) | Out-Null

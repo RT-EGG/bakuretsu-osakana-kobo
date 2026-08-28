@@ -48,6 +48,11 @@ internal static class Program
             return UpdateProcessValidation.RunAsync(args[0], args[1]).GetAwaiter().GetResult();
         }
 
+        if (Environment.GetEnvironmentVariable("BOK_UPDATE_CONFIRMATION_VALIDATION") == "1")
+        {
+            return UpdateConfirmationValidation.Run(args[1]);
+        }
+
         if (Environment.GetEnvironmentVariable("BOK_THUMBNAIL_WORKER_VALIDATION") == "1")
         {
             return RunThumbnailWorkerValidationAsync(args[0], args[1]).GetAwaiter().GetResult();
@@ -2996,7 +3001,7 @@ internal static class Program
         File.WriteAllText(fullPath, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
     }
 
-    private static void AddProductResources(ResourceDictionary resources)
+    internal static void AddProductResources(ResourceDictionary resources)
     {
         resources["AppBackgroundBrush"] = new SolidColorBrush(Color.FromRgb(0x0C, 0x11, 0x19));
         resources["TextBrush"] = new SolidColorBrush(Color.FromRgb(0xF2, 0xF6, 0xFC));

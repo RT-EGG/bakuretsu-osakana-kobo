@@ -120,6 +120,23 @@ public sealed class UpdatePackageDownloaderTests
         Assert.Empty(Directory.EnumerateFileSystemEntries(directory.Path));
     }
 
+    [Fact]
+    public async Task DownloadAsync_WhenStorageAccessIsDenied_ReturnsStorageFailureWithoutRequestOrFiles()
+    {
+        using var directory = new TemporaryDirectory();
+        var bytes = CreatePackage();
+        using var handler = new PackageHandler(bytes);
+        using var httpClient = new HttpClient(handler);
+
+        var result = await new UpdatePackageDownloader(httpClient, new AccessDeniedCapacity())
+            .DownloadAsync(Asset(bytes), directory.Path);
+
+        Assert.Equal(UpdatePackageDownloadStatus.StorageFailure, result.Status);
+        Assert.Contains("denied", result.TechnicalMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, handler.CallCount);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(directory.Path));
+    }
+
     [Theory]
     [InlineData(536870913L, "https://github.com/RT-EGG/bakuretsu-osakana-kobo/releases/download/v1.2.0/BakuretsuOsakanaKobo-win-x64.zip")]
     [InlineData(100L, "https://github.com/another/repository/releases/download/v1.2.0/BakuretsuOsakanaKobo-win-x64.zip")]
@@ -279,6 +296,12 @@ public sealed class UpdatePackageDownloaderTests
             var index = Math.Min(Interlocked.Increment(ref _index) - 1, values.Length - 1);
             return values[index];
         }
+    }
+
+    private sealed class AccessDeniedCapacity : IUpdateStorageCapacity
+    {
+        public long GetAvailableFreeSpace(string directoryPath) =>
+            throw new UnauthorizedAccessException("Storage access denied for validation.");
     }
 
     private sealed class PackageHandler(byte[] bytes, bool includeContentLength = true) : HttpMessageHandler

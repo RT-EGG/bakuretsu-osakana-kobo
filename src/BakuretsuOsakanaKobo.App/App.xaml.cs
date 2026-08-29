@@ -28,9 +28,12 @@ public partial class App : Application
     private Task? _secondaryLaunchTask;
     private HttpClient? _updateHttpClient;
     private HttpClient? _updateDownloadHttpClient;
+    private StartupPerformanceTrace? _startupPerformanceTrace;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
+        _startupPerformanceTrace = StartupPerformanceTrace.TryCreate(e.Args);
+        _startupPerformanceTrace?.Record("onStartupEntered");
         base.OnStartup(e);
 
         var updateStartupArguments = UpdateStartupResultReader.ExtractArguments(e.Args);
@@ -46,6 +49,7 @@ public partial class App : Application
             Shutdown(forwarded ? 0 : 1);
             return;
         }
+        _startupPerformanceTrace?.Record("primaryInstanceReady");
 
         _singleInstanceCoordinator.RequestReceived += HandleSecondaryLaunchRequestAsync;
         if (!_secondaryLaunchRequests.Writer.TryWrite(new LaunchRequest
@@ -62,19 +66,33 @@ public partial class App : Application
         var paths = PortableDataPaths.ForCurrentProcess();
         var logResult = FileDiagnosticLog.TryOpen(paths.LogsDirectory);
         _diagnosticLog = logResult.Log;
+        _startupPerformanceTrace?.Record("portablePathsAndLogReady");
 
+        _startupPerformanceTrace?.Record("windowConstructionStarted");
         var window = new MainWindow();
         MainWindow = window;
         _errorReporter = new ErrorReporter(_diagnosticLog, new MainWindowNotificationSink(window));
+        _startupPerformanceTrace?.Record("windowConstructionCompleted");
+        _startupPerformanceTrace?.Record("updateResultReadStarted");
         var updateStartupResult = await UpdateStartupResultReader.ReadAsync(
             updateStartupArguments.ResultPath,
             UpdateApplicationCoordinator.GetDefaultWorkingRoot());
+        _startupPerformanceTrace?.Record("updateResultReadCompleted");
+        _startupPerformanceTrace?.Record("appSettingsInitializationStarted");
         var appSettings = await InitializeAppSettingsAsync(paths, _errorReporter);
+        _startupPerformanceTrace?.Record("appSettingsInitializationCompleted");
+        _startupPerformanceTrace?.Record("videoProfilesInitializationStarted");
         var videoProfiles = await InitializeVideoProfilesAsync(paths, _errorReporter);
+        _startupPerformanceTrace?.Record("videoProfilesInitializationCompleted");
+        _startupPerformanceTrace?.Record("recentFilesInitializationStarted");
         var recentFiles = await InitializeRecentFilesAsync(paths, _errorReporter);
+        _startupPerformanceTrace?.Record("recentFilesInitializationCompleted");
+        _startupPerformanceTrace?.Record("playlistInitializationStarted");
         var playlist = await InitializePlaylistAsync(paths, _errorReporter);
+        _startupPerformanceTrace?.Record("playlistInitializationCompleted");
         IPlaybackBackend? playbackBackend = null;
         IThumbnailGenerationService? thumbnailGenerationService = null;
+        _startupPerformanceTrace?.Record("playbackInitializationStarted");
         try
         {
             playbackBackend = new LibVlcPlaybackBackend(ReportPlaybackCallbackException);
@@ -90,9 +108,11 @@ public partial class App : Application
                 exception.Message,
                 exception);
         }
+        _startupPerformanceTrace?.Record("playbackInitializationCompleted");
 
         if (playbackBackend is not null)
         {
+            _startupPerformanceTrace?.Record("thumbnailInitializationStarted");
             try
             {
                 thumbnailGenerationService = new ThumbnailGenerationService(ReportPlaybackCallbackException);
@@ -105,8 +125,10 @@ public partial class App : Application
                     exception.Message,
                     exception);
             }
+            _startupPerformanceTrace?.Record("thumbnailInitializationCompleted");
         }
 
+        _startupPerformanceTrace?.Record("serviceConfigurationStarted");
         window.ConfigureServices(
             paths,
             _errorReporter,
@@ -119,9 +141,26 @@ public partial class App : Application
             CreateUpdateCheckService(_errorReporter, out var currentVersion),
             currentVersion,
             CreateApplicationUpdateCoordinator(paths));
+        _startupPerformanceTrace?.Record("serviceConfigurationCompleted");
         _singleInstanceCoordinator.Diagnostic += SingleInstanceCoordinator_OnDiagnostic;
         RegisterGlobalErrorHandlers();
+        if (_startupPerformanceTrace is { } startupTrace)
+        {
+            EventHandler? contentRenderedHandler = null;
+            contentRenderedHandler = (_, _) =>
+            {
+                window.ContentRendered -= contentRenderedHandler;
+                startupTrace.Record("contentRendered");
+                window.Dispatcher.BeginInvoke(
+                    DispatcherPriority.ApplicationIdle,
+                    new Action(() => startupTrace.Record("dispatcherIdle")));
+            };
+            window.ContentRendered += contentRenderedHandler;
+        }
+
+        _startupPerformanceTrace?.Record("showStarted");
         window.Show();
+        _startupPerformanceTrace?.Record("showReturned");
         window.PresentApplicationUpdateResult(updateStartupResult);
 
         _diagnosticLog.Write(new DiagnosticEvent(
@@ -136,7 +175,9 @@ public partial class App : Application
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
         await _initialLaunchHandled.Task;
+        _startupPerformanceTrace?.Record("initialLaunchHandled");
         window.StartAutomaticUpdateCheck();
+        _startupPerformanceTrace?.Record("automaticUpdateCheckStarted");
 
         if (logResult.Exception is not null)
         {
@@ -155,6 +196,8 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _startupPerformanceTrace?.WriteIncompleteOnExit();
+        _startupPerformanceTrace = null;
         UnregisterGlobalErrorHandlers();
         _secondaryLaunchRequests.Writer.TryComplete();
         _secondaryLaunchCancellation.Cancel();
@@ -248,6 +291,11 @@ public partial class App : Application
 
     private async Task HandleLaunchRequestAsync(MainWindow window, LaunchRequest request)
     {
+        if (request.IsInitialLaunch)
+        {
+            _startupPerformanceTrace?.Record("initialLaunchHandlingStarted");
+        }
+
         await window.HandleLaunchRequestAsync(request);
         var action = request.FileArguments.Length switch
         {

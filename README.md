@@ -13,6 +13,7 @@ Windows 11向けのMP4/WMV動画プレイヤーです。基本再生に加え、
 - 設定間隔で生成するシークサムネイルとホバー位置の優先表示
 - 欠損・非対応・破損動画の案内、診断ログ、壊れた設定データからの自動復旧
 - 同一利用者での単一起動と、二次起動から既存ウィンドウへの動画引き渡し
+- 1日1回の更新確認と、「ヘルプ」→「更新を確認」からの安全なダウンロード・置換・再起動
 
 ## 使い方
 
@@ -24,6 +25,8 @@ Windows 11向けのMP4/WMV動画プレイヤーです。基本再生に加え、
 5. 画面下部で再生、一時停止、シーク、音量、ミュート、速度を操作します。動画面の右クリックから、
    再生速度、開始位置の登録、フルスクリーンも選択できます。
 6. 「表示」メニューからプレイリストとサムネイル設定を開けます。
+7. 「ヘルプ」→「更新を確認」から新しい正式版を確認できます。更新を適用する場合は、内容を確認して
+   明示的に同意した後、本体が終了・更新・再起動します。
 
 ### キーボード操作
 
@@ -68,13 +71,13 @@ dotnet test BakuretsuOsakanaKobo.slnx --configuration Release --no-build
 ```powershell
 .\scripts\build-release-candidate.ps1 `
   -OutputDirectory .tmp\release-candidate `
-  -CorrespondingSourceArchive .tmp\bakuretsu-osakana-kobo-libvlc-sources-3.0.23.1.zip `
-  -ValidationOnly
+  -CorrespondingSourceArchive .tmp\bakuretsu-osakana-kobo-libvlc-sources-3.0.23.1.zip
 
-.\scripts\measure-phase4-product-performance.ps1 -Runs 5
+.\scripts\test-v1.1.0-update.ps1 -OutputDirectory .tmp\v1.1.0-update-validation
+.\scripts\measure-v1.1.0-startup.ps1
 ```
 
-前者はlocked restore、Release build・test、framework-dependent publish、LibVLCライセンス監査、
-対応ソース再検証、ファイル台帳、バイナリZIPを生成します。`-ValidationOnly`を外す公開用実行では、
-対応ソースZIPの指定が必須です。後者は製品WPFを音声ミュート固定で別プロセス起動し、代表3動画を
-各5回測定します。
+候補生成はlocked restore、Release build・test、framework-dependent publish、LibVLCライセンス監査、
+対応ソース再検証、ファイル台帳、バイナリZIPを生成します。公開用実行ではクリーンなworktreeと
+対応ソースZIPの指定が必須です。続く2つのゲートは更新確認・実Updaterと、空シェル・完全初期化の
+起動性能を実製品で検証します。

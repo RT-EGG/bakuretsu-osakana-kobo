@@ -7,7 +7,10 @@ param(
     [int]$BetweenRunsMilliseconds = 1000,
 
     [ValidateRange(0, 10000)]
-    [int]$FileReadyDwellMilliseconds = 2000,
+    [int]$FileReadyDwellMilliseconds = 5000,
+
+    [ValidateSet('all', 'first-empty', 'existing-empty', 'existing-file-muted')]
+    [string]$ConditionId = 'all',
 
     [string]$OutputPath = 'docs/phase4/results/v1.1.0-startup-baseline.json'
 )
@@ -118,6 +121,9 @@ $conditions = @(
     [pscustomobject]@{ id = 'existing-empty'; existingData = $true; fileArgument = $false },
     [pscustomobject]@{ id = 'existing-file-muted'; existingData = $true; fileArgument = $true }
 )
+if ($ConditionId -ne 'all') {
+    $conditions = @($conditions | Where-Object id -eq $ConditionId)
+}
 $results = [Collections.Generic.List[object]]::new()
 $dataRoot = Join-Path $applicationRoot 'data'
 
@@ -185,6 +191,7 @@ try {
 
                 Write-Output (
                     "$($condition.id) $run/${Runs}: show=$([Math]::Round([double]$report.durationsMs.processStartToShowReturned, 1)) ms, " +
+                    "shell=$([Math]::Round([double]$report.durationsMs.processStartToShellInteractive, 1)) ms, " +
                     "interactive=$([Math]::Round([double]$report.durationsMs.processStartToInteractiveReady, 1)) ms, " +
                     "window=$([Math]::Round([double]$report.durationsMs.windowConstruction, 1)) ms, " +
                     "playback=$([Math]::Round([double]$report.durationsMs.playbackInitialization, 1)) ms, " +
@@ -219,6 +226,7 @@ try {
         'showToContentRendered',
         'initialLaunchHandling',
         'processStartToShowReturned',
+        'processStartToShellInteractive',
         'processStartToInteractiveReady'
     )
     $summary = @($conditions | ForEach-Object {
@@ -254,7 +262,7 @@ try {
 
     [ordered]@{
         generatedAt = [DateTimeOffset]::Now.ToString('O')
-        method = 'Separate product processes using a framework-dependent win-x64 publish. first-empty removes portable data before each run. Existing-data conditions seed four valid schema-1 documents. File-argument runs preseed a muted video profile. Interactive readiness is the latest of ContentRendered, Dispatcher ApplicationIdle, completed initial launch handling, and non-blocking automatic-update-check start. OS file cache is not cleared, so repeated runs are cold-like process starts rather than hardware cold boots.'
+        method = 'Separate product processes using a framework-dependent win-x64 publish. first-empty removes portable data before each run. Existing-data conditions seed four valid schema-1 documents. File-argument runs preseed a muted video profile. Shell interactive is recorded after ContentRendered and Dispatcher ApplicationIdle, before deferred services are required. Full interactive readiness remains the latest of shell rendering, completed initial launch handling, and non-blocking automatic-update-check start. OS file cache is not cleared, so repeated runs are cold-like process starts rather than hardware cold boots.'
         runsPerCondition = $Runs
         betweenRunsMilliseconds = $BetweenRunsMilliseconds
         fileReadyDwellMilliseconds = $FileReadyDwellMilliseconds

@@ -163,6 +163,7 @@ internal sealed class StartupPerformanceTrace
                 ["showToContentRendered"] = Duration("showReturned", "contentRendered"),
                 ["initialLaunchHandling"] = Duration("initialLaunchHandlingStarted", "initialLaunchHandled"),
                 ["processStartToShowReturned"] = Value("showReturned"),
+                ["processStartToShellInteractive"] = Value("shellInteractive"),
                 ["processStartToInteractiveReady"] = Value("interactiveReady"),
             },
         };

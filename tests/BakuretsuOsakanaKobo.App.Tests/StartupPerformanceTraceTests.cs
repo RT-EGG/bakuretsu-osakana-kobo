@@ -16,6 +16,7 @@ public sealed class StartupPerformanceTraceTests
             10,
             100,
             150,
+            175,
             200,
             250,
         ]);
@@ -29,6 +30,7 @@ public sealed class StartupPerformanceTraceTests
         trace.Record("showReturned");
         trace.Record("contentRendered");
         trace.Record("dispatcherIdle");
+        trace.Record("shellInteractive");
         trace.Record("initialLaunchHandled");
         Assert.False(File.Exists(reportPath));
         trace.Record("automaticUpdateCheckStarted");
@@ -36,6 +38,11 @@ public sealed class StartupPerformanceTraceTests
         using var report = JsonDocument.Parse(File.ReadAllBytes(reportPath));
         Assert.True(report.RootElement.GetProperty("complete").GetBoolean());
         Assert.True(report.RootElement.GetProperty("hasFileArgument").GetBoolean());
+        Assert.Equal(
+            175,
+            report.RootElement.GetProperty("durationsMs")
+                .GetProperty("processStartToShellInteractive")
+                .GetDouble());
         Assert.Equal(
             250,
             report.RootElement.GetProperty("durationsMs")

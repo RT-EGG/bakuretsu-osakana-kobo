@@ -83,6 +83,8 @@ public partial class MainWindow : Window
     private Task? _thumbnailStopTask;
     private readonly CancellationTokenSource _updateCheckCancellation = new();
     private Task? _updateCheckTask;
+    private Task? _startupInitializationTask;
+    private Action? _cancelStartupInitialization;
     private long _pendingThumbnailGenerationId;
     private long _pendingThumbnailTargetMilliseconds = -1;
     private int? _playlistCurrentIndex;
@@ -130,6 +132,37 @@ public partial class MainWindow : Window
         SeekSlider.AddHandler(Thumb.DragCompletedEvent, new DragCompletedEventHandler(SeekSlider_OnDragCompleted));
     }
 
+    internal void ConfigureStartupShell(
+        PortableDataPaths paths,
+        ErrorReporter errorReporter)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        ArgumentNullException.ThrowIfNull(errorReporter);
+        _paths = paths;
+        _errorReporter = errorReporter;
+        OpenVideoMenuItem.IsEnabled = false;
+        RecentFilesMenuItem.IsEnabled = false;
+        PlaylistMenuItem.IsEnabled = false;
+        ThumbnailSettingsMenuItem.IsEnabled = false;
+        CheckForUpdatesMenuItem.IsEnabled = false;
+        AllowDrop = false;
+        VideoInteractionSurface.AllowDrop = false;
+        EmptyStateDescriptionText.Text = "再生機能を初期化しています…";
+    }
+
+    internal void TrackStartupInitialization(Task initializationTask, Action cancelInitialization)
+    {
+        ArgumentNullException.ThrowIfNull(initializationTask);
+        ArgumentNullException.ThrowIfNull(cancelInitialization);
+        if (_startupInitializationTask is not null)
+        {
+            throw new InvalidOperationException("Startup initialization is already being tracked.");
+        }
+
+        _startupInitializationTask = initializationTask;
+        _cancelStartupInitialization = cancelInitialization;
+    }
+
     internal void ConfigureServices(
         PortableDataPaths paths,
         ErrorReporter errorReporter,
@@ -160,8 +193,15 @@ public partial class MainWindow : Window
         _thumbnailPreviewWidthPercent = settingsSnapshot?.ThumbnailPreviewWidthPercent ??
                                         ThumbnailPreviewSize.DefaultPercent;
         OpenVideoMenuItem.IsEnabled = playbackBackend is not null;
+        RecentFilesMenuItem.IsEnabled = recentFiles is not null;
+        PlaylistMenuItem.IsEnabled = playlist is not null;
         ThumbnailSettingsMenuItem.IsEnabled = appSettings is not null;
         CheckForUpdatesMenuItem.IsEnabled = updateCheckService is not null && currentVersion is not null;
+        AllowDrop = playbackBackend is not null;
+        VideoInteractionSurface.AllowDrop = playbackBackend is not null;
+        EmptyStateDescriptionText.Text = playbackBackend is null
+            ? "動画再生機能を利用できません"
+            : "MP4 または WMV をここにドラッグ＆ドロップできます";
         RebuildRecentFilesMenu();
 
         if (playbackBackend is LibVlcPlaybackBackend libVlcBackend)
@@ -1608,11 +1648,13 @@ public partial class MainWindow : Window
                 CheckForUpdatesMenuItem.IsEnabled = false;
                 _playlistWindow?.DisablePersistenceControls();
                 VideoContextMenu.IsOpen = false;
+                _cancelStartupInitialization?.Invoke();
                 _openCancellation?.Cancel();
                 _updateCheckCancellation.Cancel();
                 _videoProfileSaveTimer.Stop();
                 _thumbnailStopTask = _thumbnailGenerationService?.StopAsync();
                 _ = CloseAfterPendingWorkCompletesAsync(
+                    _startupInitializationTask,
                     _openTask,
                     _recentFileMutationTask,
                     _playlistMutationTask,
@@ -1683,6 +1725,8 @@ public partial class MainWindow : Window
         _appSettings = null;
         _updateCheckService = null;
         _currentVersion = null;
+        _startupInitializationTask = null;
+        _cancelStartupInitialization = null;
         _updateCheckCancellation.Dispose();
         _thumbnailSession = null;
         _thumbnailGenerationRun = null;
@@ -1883,6 +1927,7 @@ public partial class MainWindow : Window
             targetPath);
 
     private async Task CloseAfterPendingWorkCompletesAsync(
+        Task? startupInitializationTask,
         Task? openTask,
         Task? recentFileMutationTask,
         Task? playlistMutationTask,
@@ -1894,6 +1939,7 @@ public partial class MainWindow : Window
         // OnClosing must return before Close is requested again when there is no pending work.
         await Dispatcher.Yield(DispatcherPriority.Background);
 
+        await IgnoreReportedPendingFailureAsync(startupInitializationTask);
         await IgnoreReportedPendingFailureAsync(openTask);
         await IgnoreReportedPendingFailureAsync(recentFileMutationTask);
         await IgnoreReportedPendingFailureAsync(playlistMutationTask);

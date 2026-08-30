@@ -23,6 +23,7 @@ public partial class App : Application
             SingleWriter = true,
         });
     private readonly CancellationTokenSource _secondaryLaunchCancellation = new();
+    private readonly CancellationTokenSource _startupInitializationCancellation = new();
     private readonly TaskCompletionSource _initialLaunchHandled =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Task? _secondaryLaunchTask;
@@ -73,129 +74,275 @@ public partial class App : Application
         MainWindow = window;
         _errorReporter = new ErrorReporter(_diagnosticLog, new MainWindowNotificationSink(window));
         _startupPerformanceTrace?.Record("windowConstructionCompleted");
-        _startupPerformanceTrace?.Record("updateResultReadStarted");
-        var updateStartupResult = await UpdateStartupResultReader.ReadAsync(
-            updateStartupArguments.ResultPath,
-            UpdateApplicationCoordinator.GetDefaultWorkingRoot());
-        _startupPerformanceTrace?.Record("updateResultReadCompleted");
-        _startupPerformanceTrace?.Record("appSettingsInitializationStarted");
-        var appSettings = await InitializeAppSettingsAsync(paths, _errorReporter);
-        _startupPerformanceTrace?.Record("appSettingsInitializationCompleted");
-        _startupPerformanceTrace?.Record("videoProfilesInitializationStarted");
-        var videoProfiles = await InitializeVideoProfilesAsync(paths, _errorReporter);
-        _startupPerformanceTrace?.Record("videoProfilesInitializationCompleted");
-        _startupPerformanceTrace?.Record("recentFilesInitializationStarted");
-        var recentFiles = await InitializeRecentFilesAsync(paths, _errorReporter);
-        _startupPerformanceTrace?.Record("recentFilesInitializationCompleted");
-        _startupPerformanceTrace?.Record("playlistInitializationStarted");
-        var playlist = await InitializePlaylistAsync(paths, _errorReporter);
-        _startupPerformanceTrace?.Record("playlistInitializationCompleted");
-        IPlaybackBackend? playbackBackend = null;
-        IThumbnailGenerationService? thumbnailGenerationService = null;
-        _startupPerformanceTrace?.Record("playbackInitializationStarted");
-        try
-        {
-            playbackBackend = new LibVlcPlaybackBackend(ReportPlaybackCallbackException);
-        }
-        catch (Exception exception)
-        {
-            _errorReporter.Report(
-                new UserNotification(
-                    UserNotificationSeverity.Error,
-                    "動画再生機能を初期化できませんでした。",
-                    "アプリを再起動し、改善しない場合は配置ファイルを確認してください。"),
-                "playback-initialization-failed",
-                exception.Message,
-                exception);
-        }
-        _startupPerformanceTrace?.Record("playbackInitializationCompleted");
-
-        if (playbackBackend is not null)
-        {
-            _startupPerformanceTrace?.Record("thumbnailInitializationStarted");
-            try
-            {
-                thumbnailGenerationService = new ThumbnailGenerationService(ReportPlaybackCallbackException);
-            }
-            catch (Exception exception)
-            {
-                _errorReporter.ReportDiagnostic(
-                    DiagnosticSeverity.Warning,
-                    "thumbnail-generation-initialization-failed",
-                    exception.Message,
-                    exception);
-            }
-            _startupPerformanceTrace?.Record("thumbnailInitializationCompleted");
-        }
-
-        _startupPerformanceTrace?.Record("serviceConfigurationStarted");
-        window.ConfigureServices(
-            paths,
-            _errorReporter,
-            playbackBackend,
-            videoProfiles,
-            recentFiles,
-            playlist,
-            appSettings,
-            thumbnailGenerationService,
-            CreateUpdateCheckService(_errorReporter, out var currentVersion),
-            currentVersion,
-            CreateApplicationUpdateCoordinator(paths));
-        _startupPerformanceTrace?.Record("serviceConfigurationCompleted");
+        window.ConfigureStartupShell(paths, _errorReporter);
         _singleInstanceCoordinator.Diagnostic += SingleInstanceCoordinator_OnDiagnostic;
         RegisterGlobalErrorHandlers();
-        if (_startupPerformanceTrace is { } startupTrace)
+        var shellInteractive = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        EventHandler? contentRenderedHandler = null;
+        contentRenderedHandler = (_, _) =>
         {
-            EventHandler? contentRenderedHandler = null;
-            contentRenderedHandler = (_, _) =>
-            {
-                window.ContentRendered -= contentRenderedHandler;
-                startupTrace.Record("contentRendered");
-                window.Dispatcher.BeginInvoke(
-                    DispatcherPriority.ApplicationIdle,
-                    new Action(() => startupTrace.Record("dispatcherIdle")));
-            };
-            window.ContentRendered += contentRenderedHandler;
-        }
+            window.ContentRendered -= contentRenderedHandler;
+            _startupPerformanceTrace?.Record("contentRendered");
+            window.Dispatcher.BeginInvoke(
+                DispatcherPriority.ApplicationIdle,
+                new Action(() =>
+                {
+                    _startupPerformanceTrace?.Record("dispatcherIdle");
+                    _startupPerformanceTrace?.Record("shellInteractive");
+                    shellInteractive.TrySetResult();
+                }));
+        };
+        window.ContentRendered += contentRenderedHandler;
 
         _startupPerformanceTrace?.Record("showStarted");
         window.Show();
         _startupPerformanceTrace?.Record("showReturned");
-        window.PresentApplicationUpdateResult(updateStartupResult);
 
         _diagnosticLog.Write(new DiagnosticEvent(
             DiagnosticSeverity.Information,
-            "application-started",
-            "The application main window was shown."));
+            "application-shell-shown",
+            "The application shell was shown before deferred service initialization."));
 
-        _secondaryLaunchTask = ProcessSecondaryLaunchRequestsAsync(window, _secondaryLaunchCancellation.Token);
-        _ = _secondaryLaunchTask.ContinueWith(
-            static task => _ = task.Exception,
-            CancellationToken.None,
-            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
-        await _initialLaunchHandled.Task;
-        _startupPerformanceTrace?.Record("initialLaunchHandled");
-        window.StartAutomaticUpdateCheck();
-        _startupPerformanceTrace?.Record("automaticUpdateCheckStarted");
+        var startupInitializationTask = CompleteStartupInitializationAsync(
+            window,
+            paths,
+            updateStartupArguments.ResultPath,
+            logResult.Exception,
+            shellInteractive.Task,
+            _startupInitializationCancellation.Token);
+        window.TrackStartupInitialization(
+            startupInitializationTask,
+            _startupInitializationCancellation.Cancel);
+        await startupInitializationTask;
+    }
 
-        if (logResult.Exception is not null)
+    private async Task CompleteStartupInitializationAsync(
+        MainWindow window,
+        PortableDataPaths paths,
+        string? updateResultPath,
+        Exception? diagnosticLogException,
+        Task shellInteractiveTask,
+        CancellationToken cancellationToken)
+    {
+        AppSettingsRepository? appSettings = null;
+        VideoProfileRepository? videoProfiles = null;
+        RecentFileRepository? recentFiles = null;
+        PlaylistRepository? playlist = null;
+        IPlaybackBackend? playbackBackend = null;
+        IThumbnailGenerationService? thumbnailGenerationService = null;
+        Task<AppSettingsRepository?>? appSettingsTask = null;
+        Task<VideoProfileRepository?>? videoProfilesTask = null;
+        Task<RecentFileRepository?>? recentFilesTask = null;
+        Task<PlaylistRepository?>? playlistTask = null;
+        Task<IPlaybackBackend?>? playbackTask = null;
+        var ownershipTransferred = false;
+
+        try
         {
-            _errorReporter.Report(
+            await shellInteractiveTask.WaitAsync(cancellationToken);
+            _startupPerformanceTrace?.Record("updateResultReadStarted");
+            var updateResultTask = TraceCompletionAsync(
+                UpdateStartupResultReader.ReadAsync(
+                    updateResultPath,
+                    UpdateApplicationCoordinator.GetDefaultWorkingRoot()),
+                "updateResultReadCompleted");
+            _startupPerformanceTrace?.Record("appSettingsInitializationStarted");
+            appSettingsTask = TraceCompletionAsync(
+                InitializeAppSettingsAsync(paths, _errorReporter!),
+                "appSettingsInitializationCompleted");
+            _startupPerformanceTrace?.Record("videoProfilesInitializationStarted");
+            videoProfilesTask = TraceCompletionAsync(
+                InitializeVideoProfilesAsync(paths, _errorReporter!),
+                "videoProfilesInitializationCompleted");
+            _startupPerformanceTrace?.Record("recentFilesInitializationStarted");
+            recentFilesTask = TraceCompletionAsync(
+                InitializeRecentFilesAsync(paths, _errorReporter!),
+                "recentFilesInitializationCompleted");
+            _startupPerformanceTrace?.Record("playlistInitializationStarted");
+            playlistTask = TraceCompletionAsync(
+                InitializePlaylistAsync(paths, _errorReporter!),
+                "playlistInitializationCompleted");
+            _startupPerformanceTrace?.Record("playbackInitializationStarted");
+            playbackTask = Task.Run<IPlaybackBackend?>(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var backend = new LibVlcPlaybackBackend(ReportPlaybackCallbackException);
+                if (!cancellationToken.IsCancellationRequested)
+                {
+                    return backend;
+                }
+
+                backend.Dispose();
+                cancellationToken.ThrowIfCancellationRequested();
+                return null;
+            }, CancellationToken.None);
+            playbackTask = TraceCompletionAsync(playbackTask, "playbackInitializationCompleted");
+
+            var updateStartupResult = await updateResultTask;
+            appSettings = await appSettingsTask;
+            videoProfiles = await videoProfilesTask;
+            recentFiles = await recentFilesTask;
+            playlist = await playlistTask;
+            try
+            {
+                playbackBackend = await playbackTask;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                _errorReporter!.Report(
+                    new UserNotification(
+                        UserNotificationSeverity.Error,
+                        "動画再生機能を初期化できませんでした。",
+                        "アプリを再起動し、改善しない場合は配置ファイルを確認してください。"),
+                    "playback-initialization-failed",
+                    exception.Message,
+                    exception);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            if (playbackBackend is not null)
+            {
+                _startupPerformanceTrace?.Record("thumbnailInitializationStarted");
+                try
+                {
+                    thumbnailGenerationService = new ThumbnailGenerationService(ReportPlaybackCallbackException);
+                }
+                catch (Exception exception)
+                {
+                    _errorReporter!.ReportDiagnostic(
+                        DiagnosticSeverity.Warning,
+                        "thumbnail-generation-initialization-failed",
+                        exception.Message,
+                        exception);
+                }
+                finally
+                {
+                    _startupPerformanceTrace?.Record("thumbnailInitializationCompleted");
+                }
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            _startupPerformanceTrace?.Record("serviceConfigurationStarted");
+            ownershipTransferred = true;
+            window.ConfigureServices(
+                paths,
+                _errorReporter!,
+                playbackBackend,
+                videoProfiles,
+                recentFiles,
+                playlist,
+                appSettings,
+                thumbnailGenerationService,
+                CreateUpdateCheckService(_errorReporter!, out var currentVersion),
+                currentVersion,
+                CreateApplicationUpdateCoordinator(paths));
+            _startupPerformanceTrace?.Record("serviceConfigurationCompleted");
+            window.PresentApplicationUpdateResult(updateStartupResult);
+
+            _diagnosticLog?.Write(new DiagnosticEvent(
+                DiagnosticSeverity.Information,
+                "application-started",
+                "Deferred application service initialization completed."));
+
+            _secondaryLaunchTask = ProcessSecondaryLaunchRequestsAsync(window, _secondaryLaunchCancellation.Token);
+            _ = _secondaryLaunchTask.ContinueWith(
+                static task => _ = task.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            await _initialLaunchHandled.Task;
+            _startupPerformanceTrace?.Record("initialLaunchHandled");
+            window.StartAutomaticUpdateCheck();
+            _startupPerformanceTrace?.Record("automaticUpdateCheckStarted");
+
+            if (diagnosticLogException is not null)
+            {
+                _errorReporter!.Report(
+                    new UserNotification(
+                        UserNotificationSeverity.Warning,
+                        "診断ログを保存できません。",
+                        "アプリの配置先に書き込み権限があるか確認してください。"),
+                    "diagnostic-log-unavailable",
+                    diagnosticLogException.Message,
+                    diagnosticLogException,
+                    paths.LogsDirectory);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _diagnosticLog?.Write(new DiagnosticEvent(
+                DiagnosticSeverity.Information,
+                "startup-initialization-canceled",
+                "Deferred startup initialization was canceled during application shutdown."));
+        }
+        catch (Exception exception)
+        {
+            _errorReporter?.Report(
                 new UserNotification(
-                    UserNotificationSeverity.Warning,
-                    "診断ログを保存できません。",
-                    "アプリの配置先に書き込み権限があるか確認してください。"),
-                "diagnostic-log-unavailable",
-                logResult.Exception.Message,
-                logResult.Exception,
-                paths.LogsDirectory);
+                    UserNotificationSeverity.Error,
+                    "アプリの初期化を完了できませんでした。",
+                    "アプリを終了して、もう一度起動してください。"),
+                "startup-initialization-failed",
+                exception.Message,
+                exception);
+        }
+        finally
+        {
+            if (!ownershipTransferred)
+            {
+                appSettings ??= await GetResourceAfterPartialInitializationAsync(appSettingsTask);
+                videoProfiles ??= await GetResourceAfterPartialInitializationAsync(videoProfilesTask);
+                recentFiles ??= await GetResourceAfterPartialInitializationAsync(recentFilesTask);
+                playlist ??= await GetResourceAfterPartialInitializationAsync(playlistTask);
+                playbackBackend ??= await GetResourceAfterPartialInitializationAsync(playbackTask);
+                if (thumbnailGenerationService is not null)
+                {
+                    await thumbnailGenerationService.DisposeAsync();
+                }
+
+                playbackBackend?.Dispose();
+                videoProfiles?.Dispose();
+                recentFiles?.Dispose();
+                playlist?.Dispose();
+                appSettings?.Dispose();
+            }
+        }
+    }
+
+    private static async Task<T?> GetResourceAfterPartialInitializationAsync<T>(Task<T?>? task)
+        where T : class
+    {
+        if (task is null)
+        {
+            return null;
         }
 
+        try
+        {
+            return await task;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private async Task<T> TraceCompletionAsync<T>(Task<T> task, string completionMilestone)
+    {
+        try
+        {
+            return await task;
+        }
+        finally
+        {
+            _startupPerformanceTrace?.Record(completionMilestone);
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _startupInitializationCancellation.Cancel();
         _startupPerformanceTrace?.WriteIncompleteOnExit();
         _startupPerformanceTrace = null;
         UnregisterGlobalErrorHandlers();
@@ -219,6 +366,7 @@ public partial class App : Application
         _updateDownloadHttpClient?.Dispose();
         _updateDownloadHttpClient = null;
         _secondaryLaunchCancellation.Dispose();
+        _startupInitializationCancellation.Dispose();
         base.OnExit(e);
     }
 

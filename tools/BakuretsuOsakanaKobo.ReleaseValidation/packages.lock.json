@@ -36,8 +36,9 @@
       "BakuretsuOsakanaKobo": {
         "type": "Project",
         "dependencies": {
-          "BakuretsuOsakanaKobo.Infrastructure": "[0.1.0, )",
-          "BakuretsuOsakanaKobo.Playback": "[0.1.0, )",
+          "BakuretsuOsakanaKobo.Infrastructure": "[1.1.0, )",
+          "BakuretsuOsakanaKobo.Playback": "[1.1.0, )",
+          "BakuretsuOsakanaKobo.Update": "[1.1.0, )",
           "LibVLCSharp.WPF": "[3.10.0, )",
           "VideoLAN.LibVLC.Windows": "[3.0.23.1, )"
         }
@@ -52,6 +53,9 @@
           "NAudio.Core": "[2.3.0, )",
           "NAudio.Wasapi": "[2.3.0, )"
         }
+      },
+      "bakuretsuosakanakobo.update": {
+        "type": "Project"
       }
     },
     "net10.0-windows7.0/win-x64": {}

@@ -55,6 +55,12 @@
                           IsEnabled="False"
                           Click="ThumbnailSettingsMenuItem_OnClick" />
             </MenuItem>
+            <MenuItem Header="ヘルプ(_H)">
+                <MenuItem x:Name="CheckForUpdatesMenuItem"
+                          Header="更新を確認(_U)…"
+                          IsEnabled="False"
+                          Click="CheckForUpdatesMenuItem_OnClick" />
+            </MenuItem>
         </Menu>
 
         <Grid x:Name="VideoSurface"

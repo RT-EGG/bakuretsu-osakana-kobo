@@ -19,5 +19,6 @@
     <ProjectReference Include="../../src/BakuretsuOsakanaKobo.App/BakuretsuOsakanaKobo.App.csproj" />
     <ProjectReference Include="../../src/BakuretsuOsakanaKobo.Infrastructure/BakuretsuOsakanaKobo.Infrastructure.csproj" />
     <ProjectReference Include="../../src/BakuretsuOsakanaKobo.Playback/BakuretsuOsakanaKobo.Playback.csproj" />
+    <ProjectReference Include="../../src/BakuretsuOsakanaKobo.Update/BakuretsuOsakanaKobo.Update.csproj" />
   </ItemGroup>
 </Project>

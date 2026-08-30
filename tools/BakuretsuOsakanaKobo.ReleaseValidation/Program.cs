@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
+using System.Net.Http;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -25,10 +26,31 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args is ["--update-parent-probe", var exitSignalPath])
+        {
+            return UpdateProcessValidation.RunParentProbe(exitSignalPath);
+        }
+
+        if (args is ["--update-result", var updateResultPath] &&
+            !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("BOK_UPDATE_RESTART_PROBE")))
+        {
+            return UpdateProcessValidation.RunRestartProbe(updateResultPath);
+        }
+
         if (args.Length != 2)
         {
             Console.Error.WriteLine("Usage: BakuretsuOsakanaKobo.ReleaseValidation <video> <report.json>");
             return 2;
+        }
+
+        if (Environment.GetEnvironmentVariable("BOK_UPDATE_PROCESS_VALIDATION") == "1")
+        {
+            return UpdateProcessValidation.RunAsync(args[0], args[1]).GetAwaiter().GetResult();
+        }
+
+        if (Environment.GetEnvironmentVariable("BOK_UPDATE_CONFIRMATION_VALIDATION") == "1")
+        {
+            return UpdateConfirmationValidation.Run(args[1]);
         }
 
         if (Environment.GetEnvironmentVariable("BOK_THUMBNAIL_WORKER_VALIDATION") == "1")
@@ -39,6 +61,16 @@ internal static class Program
         if (Environment.GetEnvironmentVariable("BOK_PLAYBACK_ERROR_VALIDATION") == "1")
         {
             return RunPlaybackErrorValidation(args[0], args[1]);
+        }
+
+        if (Environment.GetEnvironmentVariable("BOK_UPDATE_CHECK_VALIDATION") == "1")
+        {
+            return RunUpdateCheckValidation(args[1]);
+        }
+
+        if (Environment.GetEnvironmentVariable("BOK_UPDATE_DOWNLOAD_VALIDATION") == "1")
+        {
+            return RunUpdateDownloadValidationAsync(args[1]).GetAwaiter().GetResult();
         }
 
         var processClock = Stopwatch.StartNew();
@@ -616,6 +648,184 @@ internal static class Program
         WriteReport(reportPath, report);
         Console.WriteLine(JsonSerializer.Serialize(report));
         return 0;
+    }
+
+    private static async Task<int> RunUpdateDownloadValidationAsync(string reportPath)
+    {
+        var fullReportPath = Path.GetFullPath(reportPath);
+        var workingRoot = $"{fullReportPath}.downloads";
+        try
+        {
+            Ensure(SemanticVersion.TryParse("1.0.0", out var currentVersion) && currentVersion is not null,
+                "The update-download validation version was invalid.");
+            using var httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
+            var check = await new GitHubReleaseClient(httpClient).CheckAsync(currentVersion!);
+            Ensure(check.Status == UpdateCheckStatus.UpdateAvailable && check.Release is not null,
+                $"The public latest release was not available for download validation: {check.Status}");
+            var release = check.Release!;
+            var result = await new UpdatePackageDownloader(httpClient).DownloadAsync(
+                release.Asset,
+                workingRoot);
+            Ensure(result.Status == UpdatePackageDownloadStatus.Prepared && result.Package is not null,
+                $"The public update package was not prepared: {result.Status} {result.TechnicalMessage}");
+            var package = result.Package!;
+
+            var report = new
+            {
+                release = release.TagName,
+                asset = release.Asset.Name,
+                archiveBytes = release.Asset.Size,
+                sha256 = release.Asset.Sha256Digest,
+                uncompressedBytes = package.UncompressedBytes,
+                fileCount = package.Files.Count,
+                executablePresent = package.Files.Contains("BakuretsuOsakanaKobo.exe", StringComparer.Ordinal),
+                dataEntryCount = package.Files.Count(path =>
+                    path.StartsWith("data/", StringComparison.OrdinalIgnoreCase)),
+            };
+            Ensure(report.executablePresent, "The public update package did not contain the application executable.");
+            Ensure(report.dataEntryCount == 0, "The public update package contained a data entry.");
+            UpdatePackageDownloader.DeletePreparedPackage(package);
+            WriteReport(fullReportPath, report);
+            Console.WriteLine(JsonSerializer.Serialize(report));
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            var report = new { error = exception.ToString() };
+            WriteReport(fullReportPath, report);
+            Console.Error.WriteLine(JsonSerializer.Serialize(report));
+            return 1;
+        }
+    }
+
+    private static int RunUpdateCheckValidation(string reportPath)
+    {
+        var fullReportPath = Path.GetFullPath(reportPath);
+        var settingsPath = $"{fullReportPath}.{Guid.NewGuid():N}.settings.json";
+        var application = new Application();
+        AddProductResources(application.Resources);
+        var window = new MainWindow
+        {
+            ShowInTaskbar = false,
+            WindowStartupLocation = WindowStartupLocation.CenterScreen,
+        };
+        var diagnosticLog = new RecordingDiagnosticLog();
+        var notificationSink = new RecordingNotificationSink(new MainWindowNotificationSink(window));
+        var updateCheckService = new UpdateCheckValidationService();
+        var appSettings = new AppSettingsRepository(settingsPath);
+        var loadResult = appSettings.LoadAsync().GetAwaiter().GetResult();
+        Ensure(loadResult.Value.LastAutomaticUpdateCheckAttemptUtc is null,
+            "The update-check validation settings did not start with an empty timestamp.");
+        Ensure(SemanticVersion.TryParse("1.1.0", out var currentVersion) && currentVersion is not null,
+            "The update-check validation version was invalid.");
+        window.ConfigureServices(
+            new PortableDataPaths(AppContext.BaseDirectory),
+            new ErrorReporter(diagnosticLog, notificationSink),
+            playbackBackend: null,
+            appSettings: appSettings,
+            updateCheckService: updateCheckService,
+            currentVersion: currentVersion);
+
+        Exception? validationFailure = null;
+        DateTimeOffset? automaticAttemptUtc = null;
+        string? automaticNotification = null;
+        string? manualNotification = null;
+        window.Loaded += async (_, _) =>
+        {
+            try
+            {
+                var checkMenuItem = (MenuItem)window.FindName("CheckForUpdatesMenuItem");
+                var notificationBorder = (Border)window.FindName("NotificationBorder");
+                var notificationText = (TextBlock)window.FindName("NotificationMessageText");
+                Ensure(checkMenuItem.IsEnabled, "The update-check menu item was not enabled.");
+                Ensure(checkMenuItem.Header?.ToString()?.Contains("更新を確認", StringComparison.Ordinal) == true,
+                    "The update-check menu item label was not displayed.");
+
+                window.StartAutomaticUpdateCheck();
+                await WaitUntilAsync(
+                    () => updateCheckService.CallCount >= 1 && checkMenuItem.IsEnabled,
+                    TimeSpan.FromSeconds(5),
+                    "The automatic update check did not complete.");
+                automaticAttemptUtc = appSettings.GetSnapshot().LastAutomaticUpdateCheckAttemptUtc;
+                automaticNotification = notificationText.Text;
+                Ensure(automaticAttemptUtc is not null && automaticAttemptUtc.Value.Offset == TimeSpan.Zero,
+                    "The automatic update-check timestamp was not persisted as UTC.");
+                Ensure(notificationBorder.Visibility == Visibility.Visible,
+                    "The available-update notification was not visible.");
+                Ensure(automaticNotification.Contains("v1.2.0", StringComparison.Ordinal),
+                    "The available-update notification did not show the release version.");
+
+                checkMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, checkMenuItem));
+                await WaitUntilAsync(
+                    () => updateCheckService.CallCount >= 2 && checkMenuItem.IsEnabled,
+                    TimeSpan.FromSeconds(5),
+                    "The manual update check did not complete.");
+                manualNotification = notificationText.Text;
+                Ensure(manualNotification.Contains("最新", StringComparison.Ordinal),
+                    "The manual up-to-date notification was not displayed.");
+
+                checkMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, checkMenuItem));
+                await WaitUntilAsync(
+                    () => updateCheckService.CallCount >= 3 && !checkMenuItem.IsEnabled,
+                    TimeSpan.FromSeconds(5),
+                    "The cancellable update check did not start.");
+                window.Close();
+            }
+            catch (Exception exception)
+            {
+                validationFailure = exception;
+                window.Close();
+            }
+        };
+
+        application.Run(window);
+        try
+        {
+            if (validationFailure is not null)
+            {
+                throw new InvalidOperationException("The real-WPF update validation failed.", validationFailure);
+            }
+
+            Ensure(updateCheckService.CancellationObserved,
+                "Application shutdown did not cancel the pending update check.");
+            Ensure(diagnosticLog.Events.Any(diagnosticEvent =>
+                    diagnosticEvent.EventName == "update-check-cancelled"),
+                "Application shutdown did not record update-check cancellation.");
+
+            using var verifier = new AppSettingsRepository(settingsPath);
+            var reloaded = verifier.LoadAsync().GetAwaiter().GetResult();
+            Ensure(reloaded.Value.LastAutomaticUpdateCheckAttemptUtc == automaticAttemptUtc,
+                "The automatic update-check timestamp was not durable after shutdown.");
+            var report = new
+            {
+                menuDisplayed = true,
+                automaticCheckCalls = 1,
+                completedManualCheckCalls = 1,
+                shutdownCancelledCheckCalls = 1,
+                totalCalls = updateCheckService.CallCount,
+                automaticAttemptUtc,
+                automaticNotification,
+                manualNotification,
+                cancellationObserved = updateCheckService.CancellationObserved,
+                cancellationDiagnosticRecorded = true,
+                settingsReloaded = true,
+            };
+            WriteReport(fullReportPath, report);
+            Console.WriteLine(JsonSerializer.Serialize(report));
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            var report = new
+            {
+                error = exception.ToString(),
+                calls = updateCheckService.CallCount,
+                cancellationObserved = updateCheckService.CancellationObserved,
+            };
+            WriteReport(fullReportPath, report);
+            Console.Error.WriteLine(JsonSerializer.Serialize(report));
+            return 1;
+        }
     }
 
     private static int RunPlaybackErrorValidation(
@@ -2791,7 +3001,7 @@ internal static class Program
         File.WriteAllText(fullPath, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
     }
 
-    private static void AddProductResources(ResourceDictionary resources)
+    internal static void AddProductResources(ResourceDictionary resources)
     {
         resources["AppBackgroundBrush"] = new SolidColorBrush(Color.FromRgb(0x0C, 0x11, 0x19));
         resources["TextBrush"] = new SolidColorBrush(Color.FromRgb(0xF2, 0xF6, 0xFC));
@@ -2930,13 +3140,72 @@ internal static class Program
         double MinimumWidth,
         double MinimumHeight);
 
-    private sealed class RecordingNotificationSink : IUserNotificationSink
+    private sealed class RecordingNotificationSink(IUserNotificationSink? forwardingSink = null)
+        : IUserNotificationSink
     {
         public List<UserNotification> Notifications { get; } = [];
 
         public void Show(UserNotification notification)
         {
             Notifications.Add(notification);
+            forwardingSink?.Show(notification);
+        }
+    }
+
+    private sealed class UpdateCheckValidationService : IUpdateCheckService
+    {
+        private int _callCount;
+        private int _cancellationObserved;
+
+        public int CallCount => Volatile.Read(ref _callCount);
+
+        public bool CancellationObserved => Volatile.Read(ref _cancellationObserved) == 1;
+
+        public Task<UpdateCheckResult> CheckAsync(
+            SemanticVersion currentVersion,
+            CancellationToken cancellationToken = default)
+        {
+            var call = Interlocked.Increment(ref _callCount);
+            return call switch
+            {
+                1 => Task.FromResult(new UpdateCheckResult(
+                    UpdateCheckStatus.UpdateAvailable,
+                    new UpdateRelease(
+                        ParseVersion("1.2.0"),
+                        "v1.2.0",
+                        "Validation release",
+                        "Real-WPF update validation release notes.",
+                        new Uri("https://github.com/RT-EGG/bakuretsu-osakana-kobo/releases/tag/v1.2.0"),
+                        new UpdateAsset(
+                            GitHubReleaseClient.AssetName,
+                            1024,
+                            new string('a', 64),
+                            new Uri("https://github.com/RT-EGG/bakuretsu-osakana-kobo/releases/download/v1.2.0/BakuretsuOsakanaKobo-win-x64.zip"))))),
+                2 => Task.FromResult(new UpdateCheckResult(UpdateCheckStatus.UpToDate)),
+                3 => WaitForCancellationAsync(cancellationToken),
+                _ => throw new InvalidOperationException($"Unexpected update-check validation call: {call}"),
+            };
+        }
+
+        private async Task<UpdateCheckResult> WaitForCancellationAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                throw new InvalidOperationException("The cancellable update check completed without cancellation.");
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                Interlocked.Exchange(ref _cancellationObserved, 1);
+                throw;
+            }
+        }
+
+        private static SemanticVersion ParseVersion(string value)
+        {
+            Ensure(SemanticVersion.TryParse(value, out var version) && version is not null,
+                $"Invalid validation semantic version: {value}");
+            return version!;
         }
     }
 

@@ -45,6 +45,9 @@
           "NAudio.Core": "[2.3.0, )",
           "NAudio.Wasapi": "[2.3.0, )"
         }
+      },
+      "bakuretsuosakanakobo.update": {
+        "type": "Project"
       }
     },
     "net10.0-windows7.0/win-x64": {}

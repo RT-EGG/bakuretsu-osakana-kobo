@@ -7,14 +7,14 @@ namespace BakuretsuOsakanaKobo.Playback;
 
 internal sealed class RealtimeAudioOutput : IDisposable
 {
-    private static readonly TimeSpan BufferDuration = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan PrebufferDuration = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan RebufferThreshold = TimeSpan.FromMilliseconds(20);
     private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(3);
+    private const int WasapiLatencyMilliseconds = 20;
 
     private readonly object _sync = new();
     private readonly Action<Exception> _failureHandler;
-    private readonly RealtimeVolumeProcessor _processor = new();
-    private readonly BufferedWaveProvider _buffer;
+    private readonly RealtimeAudioPipeline _pipeline = new();
     private readonly AutoResetEvent _stateChanged = new(false);
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Thread _renderThread;
@@ -39,6 +39,7 @@ internal sealed class RealtimeAudioOutput : IDisposable
     private long _completedDrainCount;
     private long _flushedBytes;
     private long _discardedLimiterFrames;
+    private long _discardedRawFrames;
     private long _pauseCallbackCount;
     private long _resumeCallbackCount;
     private bool _sessionNormalized;
@@ -46,19 +47,12 @@ internal sealed class RealtimeAudioOutput : IDisposable
     private bool _sessionMutedBeforeNormalization;
     private long _failureReported;
     private long _outputStarted;
+    private long _levelChangeCount;
+    private int _lastLevelChangeBufferedBytes;
 
     public RealtimeAudioOutput(Action<Exception> failureHandler)
     {
         _failureHandler = failureHandler;
-        var waveFormat = WaveFormat.CreateIeeeFloatWaveFormat(
-            RealtimeVolumeProcessor.SampleRate,
-            RealtimeVolumeProcessor.Channels);
-        _buffer = new BufferedWaveProvider(waveFormat)
-        {
-            BufferDuration = BufferDuration,
-            DiscardOnBufferOverflow = false,
-            ReadFully = false,
-        };
         _playCallback = OnAudioPlay;
         _pauseCallback = OnAudioPause;
         _resumeCallback = OnAudioResume;
@@ -78,7 +72,7 @@ internal sealed class RealtimeAudioOutput : IDisposable
         {
             lock (_sync)
             {
-                return _processor.VolumePercent;
+                return _pipeline.VolumePercent;
             }
         }
     }
@@ -89,7 +83,7 @@ internal sealed class RealtimeAudioOutput : IDisposable
         {
             lock (_sync)
             {
-                return _processor.IsMuted;
+                return _pipeline.IsMuted;
             }
         }
     }
@@ -112,22 +106,26 @@ internal sealed class RealtimeAudioOutput : IDisposable
                     Interlocked.Read(ref _completedDrainCount),
                     Interlocked.Read(ref _flushedBytes),
                     Interlocked.Read(ref _discardedLimiterFrames),
+                    Interlocked.Read(ref _discardedRawFrames),
                     Interlocked.Read(ref _pauseCallbackCount),
                     Interlocked.Read(ref _resumeCallbackCount),
-                    _processor.PendingFrames,
-                    _processor.NonFiniteInputSamples,
-                    _processor.NonFiniteOutputSamples,
-                    _processor.Peak,
-                    _processor.OverRangeSamples,
+                    _pipeline.PendingFrames,
+                    _pipeline.NonFiniteInputSamples,
+                    _pipeline.NonFiniteOutputSamples,
+                    _pipeline.Peak,
+                    _pipeline.OverRangeSamples,
                     _isPaused,
                     _isRebuffering,
-                    _buffer.BufferedBytes,
+                    _pipeline.RawBufferedBytes,
                     _sessionNormalized,
                     _sessionVolumeBeforeNormalization,
                     _sessionMutedBeforeNormalization,
                     Interlocked.Read(ref _outputStarted) != 0,
                     Interlocked.Read(ref _failureReported) != 0,
-                    _renderThread.IsAlive);
+                    _renderThread.IsAlive,
+                    Interlocked.Read(ref _levelChangeCount),
+                    _lastLevelChangeBufferedBytes,
+                    BufferedMilliseconds(_lastLevelChangeBufferedBytes));
             }
         }
     }
@@ -152,7 +150,8 @@ internal sealed class RealtimeAudioOutput : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         lock (_sync)
         {
-            _processor.SetVolumePercent(volumePercent);
+            _pipeline.SetVolumePercent(volumePercent);
+            RecordLevelChangeBufferDepth();
         }
     }
 
@@ -161,7 +160,8 @@ internal sealed class RealtimeAudioOutput : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         lock (_sync)
         {
-            _processor.SetMuted(isMuted);
+            _pipeline.SetMuted(isMuted);
+            RecordLevelChangeBufferDepth();
         }
     }
 
@@ -231,8 +231,15 @@ internal sealed class RealtimeAudioOutput : IDisposable
                     return;
                 }
 
-                var processed = _processor.Process(pcm16);
-                AddToBuffer(processed);
+                try
+                {
+                    _pipeline.AddPcm16(pcm16);
+                }
+                catch (InvalidOperationException exception)
+                {
+                    Interlocked.Increment(ref _overflowCount);
+                    throw new InvalidOperationException("The bounded raw PCM buffer overflowed.", exception);
+                }
                 // LibVLC can begin a new playback sequence with play callbacks without a
                 // matching resume callback for the pause notification from the old sequence.
                 // Receiving samples that are ready for the output is authoritative evidence
@@ -311,22 +318,22 @@ internal sealed class RealtimeAudioOutput : IDisposable
             Interlocked.Increment(ref _drainCount);
             lock (_sync)
             {
-                AddToBuffer(_processor.Flush());
+                _pipeline.BeginDrain();
                 _isDraining = true;
                 _isRebuffering = false;
             }
 
             _stateChanged.Set();
             var deadline = DateTime.UtcNow + DrainTimeout;
-            while (GetBufferedBytes() > 0 && DateTime.UtcNow < deadline && !_shutdown.IsCancellationRequested)
+            while (!IsDrainComplete() && DateTime.UtcNow < deadline && !_shutdown.IsCancellationRequested)
             {
                 Thread.Sleep(2);
             }
 
-            if (GetBufferedBytes() > 0 && !_shutdown.IsCancellationRequested)
+            if (!IsDrainComplete() && !_shutdown.IsCancellationRequested)
             {
                 throw new TimeoutException(
-                    $"The PCM drain callback timed out with {GetBufferedBytes()} buffered byte(s).");
+                    $"The PCM drain callback timed out with {GetDrainBufferedBytes()} buffered byte(s).");
             }
 
             Interlocked.Increment(ref _completedDrainCount);
@@ -357,12 +364,13 @@ internal sealed class RealtimeAudioOutput : IDisposable
                 lock (_sync)
                 {
                     if (_isRebuffering &&
-                        (_buffer.BufferedDuration >= PrebufferDuration || (_isDraining && _buffer.BufferedBytes > 0)))
+                        (_pipeline.RawBufferedDuration >= PrebufferDuration || (_isDraining && _pipeline.DrainBufferedBytes > 0)))
                     {
                         _isRebuffering = false;
                     }
 
-                    shouldStart = !_isPaused && !_isRebuffering && _buffer.BufferedBytes > 0;
+                    shouldStart = !_isPaused && !_isRebuffering &&
+                        (_isDraining ? _pipeline.DrainBufferedBytes > 0 : _pipeline.PlaybackBufferedBytes > 0);
                     shouldPause = !shouldStart;
                 }
 
@@ -370,7 +378,11 @@ internal sealed class RealtimeAudioOutput : IDisposable
                 {
                     enumerator = new MMDeviceEnumerator();
                     endpoint = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
-                    output = new WasapiOut(endpoint, AudioClientShareMode.Shared, true, 50);
+                    output = new WasapiOut(
+                        endpoint,
+                        AudioClientShareMode.Shared,
+                        true,
+                        WasapiLatencyMilliseconds);
                     output.PlaybackStopped += Output_OnPlaybackStopped;
                     output.Init(new LockedPaddedWaveProvider(this));
                     NormalizeApplicationAudioSession(endpoint);
@@ -393,12 +405,12 @@ internal sealed class RealtimeAudioOutput : IDisposable
 
                 lock (_sync)
                 {
-                    if (_isDraining && _buffer.BufferedBytes == 0)
+                    if (_isDraining && _pipeline.IsDrainComplete)
                     {
                         _isDraining = false;
                         _isRebuffering = true;
                     }
-                    else if (!_isPaused && !_isRebuffering && _buffer.BufferedBytes == 0)
+                    else if (!_isPaused && !_isRebuffering && _pipeline.PlaybackBufferedBytes == 0)
                     {
                         _isRebuffering = true;
                     }
@@ -466,64 +478,83 @@ internal sealed class RealtimeAudioOutput : IDisposable
         }
     }
 
-    private void AddToBuffer(float[] samples)
-    {
-        if (samples.Length == 0)
-        {
-            return;
-        }
-
-        var bytes = new byte[samples.Length * sizeof(float)];
-        Buffer.BlockCopy(samples, 0, bytes, 0, bytes.Length);
-        try
-        {
-            _buffer.AddSamples(bytes, 0, bytes.Length);
-            Interlocked.Add(ref _bufferedFrames, samples.Length / RealtimeVolumeProcessor.Channels);
-        }
-        catch (InvalidOperationException exception)
-        {
-            Interlocked.Increment(ref _overflowCount);
-            throw new InvalidOperationException("The bounded PCM buffer overflowed.", exception);
-        }
-    }
-
     private void ResetBufferedAudio()
     {
         Interlocked.Increment(ref _flushCount);
-        Interlocked.Add(ref _flushedBytes, _buffer.BufferedBytes);
-        Interlocked.Add(ref _discardedLimiterFrames, _processor.PendingFrames);
-        _buffer.ClearBuffer();
-        _processor.Reset();
+        var reset = _pipeline.Reset();
+        Interlocked.Add(ref _flushedBytes, reset.DiscardedProcessedBytes);
+        Interlocked.Add(ref _discardedLimiterFrames, reset.DiscardedLimiterFrames);
+        Interlocked.Add(ref _discardedRawFrames, reset.DiscardedRawFrames);
         _isDraining = false;
         _isRebuffering = true;
     }
+
+    private void RecordLevelChangeBufferDepth()
+    {
+        _lastLevelChangeBufferedBytes = _pipeline.RawBufferedBytes;
+        Interlocked.Increment(ref _levelChangeCount);
+    }
+
+    internal static double BufferedMilliseconds(int bufferedBytes)
+    {
+        var bytesPerFrame = sizeof(float) * RealtimeVolumeProcessor.Channels;
+        return Math.Max(0, bufferedBytes) * 1000.0 /
+            bytesPerFrame /
+            RealtimeVolumeProcessor.SampleRate;
+    }
+
+    internal static bool IsBelowRebufferThreshold(int bufferedBytes) =>
+        BufferedMilliseconds(bufferedBytes) < RebufferThreshold.TotalMilliseconds;
 
     private int ReadForRender(byte[] destination, int offset, int count)
     {
         lock (_sync)
         {
-            var read = _buffer.Read(destination, offset, count);
+            if (_isRebuffering && !_isDraining)
+            {
+                Array.Clear(destination, offset, count);
+                return count;
+            }
+
+            var read = _pipeline.Read(destination, offset, count, _isDraining, out var generatedFrames);
+            Interlocked.Add(ref _bufferedFrames, generatedFrames);
             Interlocked.Add(
                 ref _consumedFrames,
-                read / (_buffer.WaveFormat.BitsPerSample / 8) / _buffer.WaveFormat.Channels);
+                read / _pipeline.WaveFormat.BlockAlign);
             if (read < count)
             {
                 Array.Clear(destination, offset + read, count - read);
                 if (!_isPaused && !_isRebuffering && !_isDraining)
                 {
                     Interlocked.Increment(ref _underrunCount);
+                    _isRebuffering = true;
+                    _stateChanged.Set();
                 }
+            }
+            else if (!_isPaused && !_isRebuffering && !_isDraining &&
+                IsBelowRebufferThreshold(_pipeline.PlaybackBufferedBytes))
+            {
+                _isRebuffering = true;
+                _stateChanged.Set();
             }
 
             return count;
         }
     }
 
-    private int GetBufferedBytes()
+    private bool IsDrainComplete()
     {
         lock (_sync)
         {
-            return _buffer.BufferedBytes;
+            return _pipeline.IsDrainComplete;
+        }
+    }
+
+    private int GetDrainBufferedBytes()
+    {
+        lock (_sync)
+        {
+            return _pipeline.DrainBufferedBytes;
         }
     }
 
@@ -556,7 +587,7 @@ internal sealed class RealtimeAudioOutput : IDisposable
 
     private sealed class LockedPaddedWaveProvider(RealtimeAudioOutput owner) : IWaveProvider
     {
-        public WaveFormat WaveFormat => owner._buffer.WaveFormat;
+        public WaveFormat WaveFormat => owner._pipeline.WaveFormat;
 
         public int Read(byte[] buffer, int offset, int count) =>
             owner.ReadForRender(buffer, offset, count);
@@ -575,6 +606,7 @@ internal readonly record struct RealtimeAudioDiagnostics(
     long CompletedDrainCount,
     long FlushedBytes,
     long DiscardedLimiterFrames,
+    long DiscardedRawFrames,
     long PauseCallbackCount,
     long ResumeCallbackCount,
     int PendingLimiterFrames,
@@ -590,4 +622,7 @@ internal readonly record struct RealtimeAudioDiagnostics(
     bool SessionMutedBeforeNormalization,
     bool OutputStarted,
     bool Failed,
-    bool RenderThreadAlive);
+    bool RenderThreadAlive,
+    long LevelChangeCount,
+    int LastLevelChangeBufferedBytes,
+    double LastLevelChangeBufferedMilliseconds);

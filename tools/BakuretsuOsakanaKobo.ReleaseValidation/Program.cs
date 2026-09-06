@@ -84,6 +84,7 @@ internal static class Program
         var validatePlaylist = Environment.GetEnvironmentVariable("BOK_PLAYLIST_VALIDATION") == "1";
         var validateThumbnailSettings = Environment.GetEnvironmentVariable("BOK_THUMBNAIL_SETTINGS_VALIDATION") == "1";
         var validateThumbnailHover = Environment.GetEnvironmentVariable("BOK_THUMBNAIL_HOVER_VALIDATION") == "1";
+        var validateAudioLatency = Environment.GetEnvironmentVariable("BOK_AUDIO_LATENCY_VALIDATION") == "1";
         var profileFilePath = $"{Path.GetFullPath(args[1])}.video-profiles.json";
         VideoProfileRepository? videoProfiles = null;
         if (validateProfiles || validateStartPositions)
@@ -318,6 +319,27 @@ internal static class Program
                     };
                     WriteReport(args[1], drainReport);
                     Console.WriteLine(JsonSerializer.Serialize(drainReport));
+                    exitCode = 0;
+                    return;
+                }
+
+                if (validateAudioLatency)
+                {
+                    var audioLatencyValidation = await AudioLatencyValidation.RunAsync(
+                        volumeSlider,
+                        muteButton,
+                        backend);
+                    var audioLatencyReport = new
+                    {
+                        success = true,
+                        video = Path.GetFullPath(args[0]),
+                        processStartToWindowLoadedMs = windowLoadedMilliseconds,
+                        openToTimelineReadyMs = openMetrics.TimelineReadyMilliseconds,
+                        openToAudioOutputReadyMs = openMetrics.AudioOutputReadyMilliseconds,
+                        audioLatencyValidation,
+                    };
+                    WriteReport(args[1], audioLatencyReport);
+                    Console.WriteLine(JsonSerializer.Serialize(audioLatencyReport));
                     exitCode = 0;
                     return;
                 }
@@ -2006,7 +2028,9 @@ internal static class Program
         Ensure(diagnostics.NonFiniteOutputSamples == 0, "Natural drain produced non-finite PCM output.");
         Ensure(diagnostics.OverRangeSamples == 0, "Natural drain produced an out-of-range PCM sample.");
         Ensure(
-            diagnostics.InputFrames == diagnostics.BufferedFrames + diagnostics.DiscardedLimiterFrames,
+            diagnostics.InputFrames == diagnostics.BufferedFrames +
+                diagnostics.DiscardedLimiterFrames +
+                diagnostics.DiscardedRawFrames,
             "Natural drain did not account for every input frame.");
         var flushedFrames = diagnostics.FlushedBytes /
             (sizeof(float) * RealtimeVolumeProcessor.Channels);

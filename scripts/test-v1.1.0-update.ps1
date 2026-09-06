@@ -11,8 +11,14 @@ $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
 $releaseRoot = Join-Path $outputRoot 'release-candidate'
 $releaseBuilder = Join-Path $repoRoot 'scripts\build-release-candidate.ps1'
+$buildProperties = Join-Path $repoRoot 'Directory.Build.props'
 $validationExecutable = Join-Path $repoRoot 'tools\BakuretsuOsakanaKobo.ReleaseValidation\bin\Release\net10.0-windows\win-x64\BakuretsuOsakanaKobo.ReleaseValidation.exe'
 $reportPath = Join-Path $outputRoot 'v1.1.0-update-validation.json'
+$buildPropertiesDocument = [xml](Get-Content -Raw -LiteralPath $buildProperties)
+$expectedApplicationVersion = [string]$buildPropertiesDocument.Project.PropertyGroup.VersionPrefix
+if ($expectedApplicationVersion -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Directory.Build.props must contain a three-part VersionPrefix: $expectedApplicationVersion"
+}
 
 function Assert-Validation {
     param(
@@ -93,7 +99,8 @@ $assetManifest = Get-Content -Raw -LiteralPath $assetManifestPath | ConvertFrom-
 $productManifest = Get-Content -Raw -LiteralPath $productManifestPath | ConvertFrom-Json
 
 Assert-Validation ($assetManifest.validationOnly -eq $true) 'The local release candidate was not marked validation-only.'
-Assert-Validation ($assetManifest.applicationVersion -eq '1.1.0') 'The release candidate version was not 1.1.0.'
+Assert-Validation ($assetManifest.applicationVersion -eq $expectedApplicationVersion) `
+    "The release candidate version was not $expectedApplicationVersion."
 Assert-Validation ($productManifest.distributionMode -eq 'FrameworkDependent') 'The release candidate was not framework-dependent.'
 Assert-Validation ($productManifest.runtimeIdentifier -eq 'win-x64') 'The release candidate runtime was not win-x64.'
 Assert-Validation ($productManifest.publishSingleFile -eq $false) 'The release candidate unexpectedly used single-file publishing.'
@@ -176,4 +183,4 @@ try {
     Remove-Item -LiteralPath $temporaryReportPath -Force -ErrorAction SilentlyContinue
 }
 
-Write-Output "v1.1.0 update validation completed: $reportPath"
+Write-Output "Update validation completed for $expectedApplicationVersion`: $reportPath"

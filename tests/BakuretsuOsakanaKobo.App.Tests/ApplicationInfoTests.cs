@@ -15,6 +15,6 @@ public sealed class ApplicationInfoTests
         Assert.NotNull(version);
         Assert.Equal((ulong)1, version.Major);
         Assert.Equal((ulong)1, version.Minor);
-        Assert.Equal((ulong)0, version.Patch);
+        Assert.Equal((ulong)1, version.Patch);
     }
 }

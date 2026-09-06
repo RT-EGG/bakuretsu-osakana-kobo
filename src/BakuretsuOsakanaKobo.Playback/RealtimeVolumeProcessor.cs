@@ -64,6 +64,17 @@ internal sealed class RealtimeVolumeProcessor
         return _limiter.Process(samples);
     }
 
+    public float[] Process(float[] samples)
+    {
+        ArgumentNullException.ThrowIfNull(samples);
+        if (samples.Length % Channels != 0)
+        {
+            throw new ArgumentException("Input must contain complete stereo PCM frames.", nameof(samples));
+        }
+
+        return _limiter.Process(samples);
+    }
+
     public float[] Flush() => _limiter.Flush();
 
     public void Reset() => _limiter.Reset();

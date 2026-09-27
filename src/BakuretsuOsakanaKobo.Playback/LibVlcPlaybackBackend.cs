@@ -16,6 +16,9 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
     private long _knownLengthMilliseconds;
     private long _lastPlaybackTimeMilliseconds;
     private int _preserveTerminalPosition;
+    private int _playbackCompleted;
+    private int _completedPositionChanged;
+    private long _completedSeekPositionBits = BitConverter.DoubleToInt64Bits(1d);
     private int _runtimeErrorReported;
     private bool _disposed;
 
@@ -69,6 +72,11 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         get
         {
             ThrowIfDisposed();
+            if (Volatile.Read(ref _playbackCompleted) != 0)
+            {
+                return Interlocked.Read(ref _knownLengthMilliseconds) > 0;
+            }
+
             return MediaPlayer.IsSeekable;
         }
     }
@@ -222,6 +230,9 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
         var previousLengthMilliseconds = Interlocked.Read(ref _knownLengthMilliseconds);
         var previousTimeMilliseconds = Interlocked.Read(ref _lastPlaybackTimeMilliseconds);
         var previousPreserveTerminalPosition = Volatile.Read(ref _preserveTerminalPosition);
+        var previousPlaybackCompleted = Volatile.Read(ref _playbackCompleted);
+        var previousCompletedPositionChanged = Volatile.Read(ref _completedPositionChanged);
+        var previousCompletedSeekPositionBits = Interlocked.Read(ref _completedSeekPositionBits);
         var previousRuntimeErrorReported = Volatile.Read(ref _runtimeErrorReported);
         var nextPlaybackStateApplied = false;
         try
@@ -291,6 +302,9 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
                     ? 0
                     : (long)Math.Round(initialPosition.Value * nextLengthMilliseconds));
             Volatile.Write(ref _preserveTerminalPosition, 0);
+            Volatile.Write(ref _playbackCompleted, 0);
+            Volatile.Write(ref _completedPositionChanged, 0);
+            Interlocked.Exchange(ref _completedSeekPositionBits, BitConverter.DoubleToInt64Bits(1d));
             Volatile.Write(ref _runtimeErrorReported, 0);
             nextPlaybackStateApplied = true;
             if (!MediaPlayer.Play(nextMedia))
@@ -369,6 +383,11 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
                 Interlocked.Exchange(ref _knownLengthMilliseconds, previousLengthMilliseconds);
                 Interlocked.Exchange(ref _lastPlaybackTimeMilliseconds, previousTimeMilliseconds);
                 Volatile.Write(ref _preserveTerminalPosition, previousPreserveTerminalPosition);
+                Volatile.Write(ref _playbackCompleted, previousPlaybackCompleted);
+                Volatile.Write(ref _completedPositionChanged, previousCompletedPositionChanged);
+                Interlocked.Exchange(
+                    ref _completedSeekPositionBits,
+                    previousCompletedSeekPositionBits);
                 Volatile.Write(ref _runtimeErrorReported, previousRuntimeErrorReported);
             }
 
@@ -394,6 +413,12 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
     public void Play()
     {
         ThrowIfDisposed();
+        if (Volatile.Read(ref _playbackCompleted) != 0)
+        {
+            ReplayCompletedMedia();
+            return;
+        }
+
         _audioOutput.PrepareForPlayback();
         MediaPlayer.Play();
     }
@@ -413,7 +438,27 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
     public void Seek(double normalizedPosition)
     {
         ThrowIfDisposed();
-        MediaPlayer.Position = (float)PlaybackPosition.Normalize(normalizedPosition);
+        var normalized = PlaybackPosition.Normalize(normalizedPosition);
+        if (Volatile.Read(ref _playbackCompleted) != 0)
+        {
+            var lengthMilliseconds = Interlocked.Read(ref _knownLengthMilliseconds);
+            if (lengthMilliseconds <= 0)
+            {
+                return;
+            }
+
+            Interlocked.Exchange(
+                ref _completedSeekPositionBits,
+                BitConverter.DoubleToInt64Bits(normalized));
+            Interlocked.Exchange(
+                ref _lastPlaybackTimeMilliseconds,
+                PlaybackCompletion.TimeAtPosition(normalized, lengthMilliseconds));
+            Volatile.Write(ref _completedPositionChanged, 1);
+            RaiseSafely(StateChanged, EventArgs.Empty);
+            return;
+        }
+
+        MediaPlayer.Position = (float)normalized;
     }
 
     public void SetVolumePercent(int volumePercent)
@@ -542,6 +587,18 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
             return;
         }
 
+        if (Interlocked.Exchange(ref _playbackCompleted, 1) != 0)
+        {
+            return;
+        }
+
+        var terminalTimeMilliseconds = PlaybackCompletion.TerminalTime(
+            playbackTimeMilliseconds,
+            lengthMilliseconds);
+        Interlocked.Exchange(ref _lastPlaybackTimeMilliseconds, terminalTimeMilliseconds);
+        Interlocked.Exchange(ref _completedSeekPositionBits, BitConverter.DoubleToInt64Bits(1d));
+        Volatile.Write(ref _completedPositionChanged, 0);
+        Volatile.Write(ref _preserveTerminalPosition, 1);
         RaiseSafely(StateChanged, EventArgs.Empty);
         if (Volatile.Read(ref _runtimeErrorReported) == 0)
         {
@@ -556,6 +613,99 @@ public sealed class LibVlcPlaybackBackend : IPlaybackBackend
             "別の動画を開くか、ファイルの状態を確認してください。",
             "LibVLC raised the MediaPlayer.EncounteredError event.",
             targetPath: CurrentPath));
+
+    private void ReplayCompletedMedia()
+    {
+        var lengthMilliseconds = Interlocked.Read(ref _knownLengthMilliseconds);
+        var completedTimeMilliseconds = Interlocked.Read(ref _lastPlaybackTimeMilliseconds);
+        var completedPositionChanged = Volatile.Read(ref _completedPositionChanged);
+        var completedSeekPositionBits = Interlocked.Read(ref _completedSeekPositionBits);
+        var replayPosition = PlaybackCompletion.ReplayPosition(
+            completedPositionChanged != 0,
+            BitConverter.Int64BitsToDouble(completedSeekPositionBits));
+        var replayTimeMilliseconds = PlaybackCompletion.TimeAtPosition(
+            replayPosition,
+            lengthMilliseconds);
+
+        try
+        {
+            Interlocked.Exchange(ref _lastPlaybackTimeMilliseconds, replayTimeMilliseconds);
+            Volatile.Write(ref _preserveTerminalPosition, 0);
+            Volatile.Write(ref _playbackCompleted, 0);
+            Volatile.Write(ref _completedPositionChanged, 0);
+            MediaPlayer.Stop();
+            _audioOutput.PrepareForPlayback();
+            if (!MediaPlayer.Play())
+            {
+                TryStopAfterReplayFailure();
+                RestoreCompletedPlayback(
+                    completedTimeMilliseconds,
+                    completedPositionChanged,
+                    completedSeekPositionBits);
+                RaiseError(new PlaybackErrorEventArgs(
+                    "playback-replay-rejected",
+                    "動画をもう一度再生できませんでした。",
+                    "別の動画を開くか、もう一度操作してください。",
+                    "LibVLC rejected replay after the media reached its natural end.",
+                    targetPath: CurrentPath));
+                RaiseSafely(StateChanged, EventArgs.Empty);
+                return;
+            }
+
+            MediaPlayer.Position = (float)replayPosition;
+            if (MediaPlayer.SetRate(_rate) != 0)
+            {
+                RaiseError(new PlaybackErrorEventArgs(
+                    "playback-replay-rate-rejected",
+                    "再生速度を復元できませんでした。",
+                    "右クリックメニューから再生速度を選び直してください。",
+                    $"LibVLC rejected replay rate {_rate}.",
+                    targetPath: CurrentPath));
+            }
+
+            RaiseSafely(StateChanged, EventArgs.Empty);
+        }
+        catch (Exception exception)
+        {
+            TryStopAfterReplayFailure();
+            RestoreCompletedPlayback(
+                completedTimeMilliseconds,
+                completedPositionChanged,
+                completedSeekPositionBits);
+            RaiseError(new PlaybackErrorEventArgs(
+                "playback-replay-failed",
+                "動画をもう一度再生できませんでした。",
+                "別の動画を開くか、もう一度操作してください。",
+                exception.Message,
+                exception,
+                CurrentPath));
+            RaiseSafely(StateChanged, EventArgs.Empty);
+        }
+    }
+
+    private void TryStopAfterReplayFailure()
+    {
+        try
+        {
+            MediaPlayer.Stop();
+        }
+        catch (Exception stopException)
+        {
+            ReportCallbackException(stopException);
+        }
+    }
+
+    private void RestoreCompletedPlayback(
+        long timeMilliseconds,
+        int positionChanged,
+        long seekPositionBits)
+    {
+        Interlocked.Exchange(ref _lastPlaybackTimeMilliseconds, timeMilliseconds);
+        Interlocked.Exchange(ref _completedSeekPositionBits, seekPositionBits);
+        Volatile.Write(ref _completedPositionChanged, positionChanged);
+        Volatile.Write(ref _preserveTerminalPosition, 1);
+        Volatile.Write(ref _playbackCompleted, 1);
+    }
 
     private void OnAudioOutputFailure(Exception exception) =>
         RaiseError(new PlaybackErrorEventArgs(

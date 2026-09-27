@@ -37,4 +37,44 @@ public sealed class PlaybackCompletionTests
             playbackTimeMilliseconds,
             lengthMilliseconds));
     }
+
+    [Theory]
+    [InlineData(4_900, 5_000, 5_000)]
+    [InlineData(4_900, 0, 4_900)]
+    [InlineData(-1, 0, 0)]
+    public void TerminalTime_PresentsKnownNaturalEndAtTheMediaLength(
+        long playbackTime,
+        long length,
+        long expected)
+    {
+        Assert.Equal(expected, PlaybackCompletion.TerminalTime(playbackTime, length));
+    }
+
+    [Theory]
+    [InlineData(false, 0.4, 0)]
+    [InlineData(true, 0.4, 0.4)]
+    [InlineData(true, -1, 0)]
+    [InlineData(true, 2, 1)]
+    public void ReplayPosition_UsesTheBeginningUntilTheUserSeeksAfterCompletion(
+        bool positionChanged,
+        double selectedPosition,
+        double expected)
+    {
+        Assert.Equal(
+            expected,
+            PlaybackCompletion.ReplayPosition(positionChanged, selectedPosition),
+            precision: 6);
+    }
+
+    [Theory]
+    [InlineData(0.4, 5_000, 2_000)]
+    [InlineData(2, 5_000, 5_000)]
+    [InlineData(0.4, 0, 0)]
+    public void TimeAtPosition_ClampsAndConvertsTheCompletedSeekPosition(
+        double position,
+        long length,
+        long expected)
+    {
+        Assert.Equal(expected, PlaybackCompletion.TimeAtPosition(position, length));
+    }
 }

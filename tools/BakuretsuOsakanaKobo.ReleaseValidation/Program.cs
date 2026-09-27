@@ -85,6 +85,8 @@ internal static class Program
         var validateThumbnailSettings = Environment.GetEnvironmentVariable("BOK_THUMBNAIL_SETTINGS_VALIDATION") == "1";
         var validateThumbnailHover = Environment.GetEnvironmentVariable("BOK_THUMBNAIL_HOVER_VALIDATION") == "1";
         var validateAudioLatency = Environment.GetEnvironmentVariable("BOK_AUDIO_LATENCY_VALIDATION") == "1";
+        var validatePlaybackCompletion =
+            Environment.GetEnvironmentVariable("BOK_PLAYBACK_COMPLETION_VALIDATION") == "1";
         var profileFilePath = $"{Path.GetFullPath(args[1])}.video-profiles.json";
         VideoProfileRepository? videoProfiles = null;
         if (validateProfiles || validateStartPositions)
@@ -219,6 +221,31 @@ internal static class Program
                 var openMetrics = await MeasureOpenAsync(window, seekSlider, backend, args[0]);
                 Ensure(seekSlider.ToolTip is null, "The playback-position slider displayed a tooltip during playback.");
                 var lengthMilliseconds = backend.LengthMilliseconds;
+                if (validatePlaybackCompletion)
+                {
+                    var playbackCompletionValidation = await ValidatePlaybackCompletionAsync(
+                        window,
+                        seekSlider,
+                        backend,
+                        lengthMilliseconds);
+                    var completionReport = new
+                    {
+                        success = true,
+                        video = Path.GetFullPath(args[0]),
+                        muted = backend.IsMuted,
+                        processStartToWindowLoadedMs = windowLoadedMilliseconds,
+                        openToTimelineReadyMs = openMetrics.TimelineReadyMilliseconds,
+                        openToAudioOutputReadyMs = openMetrics.AudioOutputReadyMilliseconds,
+                        lengthMilliseconds,
+                        playbackCompletionValidation,
+                        audioDiagnostics = backend.AudioDiagnostics,
+                    };
+                    WriteReport(args[1], completionReport);
+                    Console.WriteLine(JsonSerializer.Serialize(completionReport));
+                    exitCode = 0;
+                    return;
+                }
+
                 if (validateThumbnailHover)
                 {
                     thumbnailHoverValidation = await ValidateThumbnailHoverAsync(
@@ -2038,6 +2065,102 @@ internal static class Program
             diagnostics.BufferedFrames == diagnostics.ConsumedFrames + flushedFrames,
             $"Natural drain did not account for every buffered frame: buffered={diagnostics.BufferedFrames}, consumed={diagnostics.ConsumedFrames}, flushed={flushedFrames}.");
         return diagnostics;
+    }
+
+    private static async Task<object> ValidatePlaybackCompletionAsync(
+        MainWindow window,
+        Slider seekSlider,
+        LibVlcPlaybackBackend backend,
+        long lengthMilliseconds)
+    {
+        Ensure(lengthMilliseconds > 0, "Playback-completion validation requires a known duration.");
+        var playButton = (Button)window.FindName("PlayPauseButton");
+        var timeText = (TextBlock)window.FindName("TimeText");
+        var playbackEndedCount = 0;
+        backend.PlaybackEnded += OnPlaybackEnded;
+        try
+        {
+            await WaitUntilAsync(
+                () => Volatile.Read(ref playbackEndedCount) >= 1 &&
+                      !backend.IsPlaying &&
+                      backend.IsSeekable &&
+                      backend.TimeMilliseconds == lengthMilliseconds &&
+                      seekSlider.IsEnabled &&
+                      seekSlider.Value >= 0.999 &&
+                      playButton.IsEnabled &&
+                      Equals(playButton.Content, "▶"),
+                TimeSpan.FromSeconds(15),
+                "Natural completion did not remain as a seekable paused presentation.");
+            var firstCompletionTimeText = timeText.Text;
+            var firstCompletionPlayButtonContent = playButton.Content?.ToString();
+            var seekEnabledAtCompletion = seekSlider.IsEnabled;
+
+            playButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, playButton));
+            await WaitUntilAsync(
+                () => backend.IsPlaying &&
+                      backend.TimeMilliseconds >= 0 &&
+                      backend.TimeMilliseconds < lengthMilliseconds / 2,
+                TimeSpan.FromSeconds(5),
+                "Play after natural completion did not restart the video from the beginning.");
+            var restartedFromBeginningMilliseconds = backend.TimeMilliseconds;
+
+            await WaitUntilAsync(
+                () => Volatile.Read(ref playbackEndedCount) >= 2 &&
+                      !backend.IsPlaying &&
+                      backend.TimeMilliseconds == lengthMilliseconds,
+                TimeSpan.FromSeconds(15),
+                "The replayed video did not reach a second natural completion.");
+
+            const double requestedPosition = 0.4;
+            seekSlider.Value = requestedPosition;
+            var requestedTimeMilliseconds = (long)Math.Round(requestedPosition * lengthMilliseconds);
+            await WaitUntilAsync(
+                () => !backend.IsPlaying &&
+                      Math.Abs(backend.TimeMilliseconds - requestedTimeMilliseconds) <= 1 &&
+                      Math.Abs(seekSlider.Value - requestedPosition) <= 0.001,
+                TimeSpan.FromSeconds(2),
+                "Seeking after natural completion did not update the paused playback position.");
+            var completedSeekTimeText = timeText.Text;
+
+            playButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, playButton));
+            await WaitUntilAsync(
+                () => backend.IsPlaying &&
+                      backend.TimeMilliseconds >= requestedTimeMilliseconds &&
+                      backend.TimeMilliseconds < lengthMilliseconds * 0.8,
+                TimeSpan.FromSeconds(5),
+                "Play after a completed-state seek did not resume from the requested position.");
+            var resumedFromRequestedMilliseconds = backend.TimeMilliseconds;
+            backend.Pause();
+
+            var diagnostics = backend.AudioDiagnostics;
+            Ensure(!diagnostics.Failed, "Playback replay reported an audio-output failure.");
+            Ensure(diagnostics.UnderrunCount == 0, "Playback replay reported a PCM underrun.");
+            Ensure(diagnostics.OverflowCount == 0, "Playback replay reported a PCM overflow.");
+            Ensure(diagnostics.NonFiniteInputSamples == 0, "Playback replay received non-finite PCM input.");
+            Ensure(diagnostics.NonFiniteOutputSamples == 0, "Playback replay produced non-finite PCM output.");
+            Ensure(diagnostics.OverRangeSamples == 0, "Playback replay produced an out-of-range PCM sample.");
+
+            return new
+            {
+                playbackEndedCount,
+                firstCompletionMilliseconds = lengthMilliseconds,
+                firstCompletionTimeText,
+                firstCompletionPlayButtonContent,
+                seekEnabledAtCompletion,
+                restartedFromBeginningMilliseconds,
+                requestedPosition,
+                requestedTimeMilliseconds,
+                completedSeekTimeText,
+                resumedFromRequestedMilliseconds,
+            };
+        }
+        finally
+        {
+            backend.PlaybackEnded -= OnPlaybackEnded;
+        }
+
+        void OnPlaybackEnded(object? sender, EventArgs eventArgs) =>
+            Interlocked.Increment(ref playbackEndedCount);
     }
 
     private static async Task<object> ValidateAudibleVolumeAsync(
